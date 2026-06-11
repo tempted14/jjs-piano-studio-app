@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local app state
+outputs/.venv/
+outputs/__pycache__/
+outputs/audio_conversion_jobs/
+outputs/online_midis/
+outputs/piano_macro_settings.json
+outputs/piano_studio_library.json
+
+# Generated media and exports
+*.mid
+*.midi
+*.wav
+*.mp3
+*.flac
+*.ogg
+*.m4a
+*.aac
+*.jjspiano.json
+
+# Build artifacts
+build/
+dist/
+*.spec
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
