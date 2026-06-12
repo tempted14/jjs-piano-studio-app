@@ -5105,8 +5105,9 @@ class PianoMacroApp(tk.Tk):
         if index >= 0:
             self.library_listbox.selection_set(index)
         entry = self._selected_library_entry()
-        menu = tk.Menu(self, tearoff=0, bg=UI_SURFACE, fg=UI_TEXT,
-                        activebackground=UI_SURFACE_HOVER, activeforeground=UI_TEXT)
+        c = getattr(self, "_c", {"surface": UI_SURFACE, "surface2": UI_SURFACE_HOVER, "text": UI_TEXT})
+        menu = tk.Menu(self, tearoff=0, bg=c["surface"], fg=c["text"],
+                        activebackground=c["surface2"], activeforeground=c["text"])
         menu.add_command(label="Load", command=self.load_selected_song)
         menu.add_command(label="Duplicate", command=self.duplicate_selected_song)
         fav_label = "Unstar" if (entry and entry.get("favorite")) else "Star"
@@ -5810,7 +5811,8 @@ class PianoMacroApp(tk.Tk):
         window.title("Timeline Editor")
         window.geometry("880x520")
         window.minsize(760, 440)
-        window.configure(bg=UI_BG)
+        c = getattr(self, "_c", {"bg": UI_BG, "field": UI_FIELD, "border": UI_BORDER, "accent": UI_ACCENT})
+        window.configure(bg=c["bg"])
         window.transient(self)
 
         start_var = tk.DoubleVar(value=max(0.0, float(self.playback_start_offset.get())))
@@ -5823,7 +5825,7 @@ class PianoMacroApp(tk.Tk):
         root.rowconfigure(1, weight=1)
 
         ttk.Label(root, text="Timeline Editor", style="Title.TLabel").grid(row=0, column=0, sticky="w")
-        canvas = tk.Canvas(root, bg=UI_FIELD, highlightthickness=1, highlightbackground=UI_BORDER, height=250)
+        canvas = tk.Canvas(root, bg=c["field"], highlightthickness=1, highlightbackground=c["border"], height=250)
         canvas.grid(row=1, column=0, sticky="nsew", pady=(12, 10))
 
         controls = ttk.Frame(root)
@@ -5990,7 +5992,8 @@ class PianoMacroApp(tk.Tk):
         window.title("Online MIDI Search")
         window.geometry("900x640")
         window.minsize(780, 540)
-        window.configure(bg=UI_BG)
+        c = getattr(self, "_c", {"bg": UI_BG, "surface": UI_SURFACE, "surface2": UI_SURFACE_HOVER, "text": UI_TEXT})
+        window.configure(bg=c["bg"])
         window.transient(self)
 
         query_var = tk.StringVar(value="")
@@ -6027,7 +6030,7 @@ class PianoMacroApp(tk.Tk):
         query_entry.grid(row=0, column=0, sticky="ew", padx=(0, 8))
 
         history_var = tk.StringVar(value="History")
-        history_menu = tk.Menu(query_entry, tearoff=0, bg=UI_SURFACE, fg=UI_TEXT, activebackground=UI_SURFACE_HOVER, activeforeground=UI_TEXT)
+        history_menu = tk.Menu(query_entry, tearoff=0, bg=c["surface"], fg=c["text"], activebackground=c["surface2"], activeforeground=c["text"])
         history_button = ttk.Button(query_row, text="\u25BE", width=3, command=lambda: show_history_menu())
         history_button.grid(row=0, column=1, padx=(0, 8))
 
