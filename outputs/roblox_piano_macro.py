@@ -4106,6 +4106,8 @@ class PianoMacroApp(tk.Tk):
         self.preview_text: dict[int, list[int]] = {}
         self.preview_is_black: dict[int, bool] = {}
         self.preview_active_notes: set[int] = set()
+        self.preview_note_velocities: dict[int, int] = {}
+        self.metronome_active = False
         self.listener = None
         self.pressed_hotkey_parts: set[str] = set()
         self.hotkey_capture_target: tuple[str, tk.StringVar] | None = None
@@ -4147,6 +4149,7 @@ class PianoMacroApp(tk.Tk):
         self.loop_enabled = tk.BooleanVar(value=False)
         self.loop_start_sec = tk.DoubleVar(value=0.0)
         self.loop_end_sec = tk.DoubleVar(value=0.0)
+        self.metronome_enabled = tk.BooleanVar(value=False)
         self.practice_mode = tk.BooleanVar(value=False)
         self.practice_start_speed = tk.DoubleVar(value=0.50)
         self.practice_target_speed = tk.DoubleVar(value=1.0)
@@ -4157,6 +4160,9 @@ class PianoMacroApp(tk.Tk):
         self.midi_track_filter = tk.StringVar(value="All tracks")
         self.playback_queue: list[str] = []  # list of song IDs
         self.recent_midi_files: list[str] = []
+        self.recording = tk.BooleanVar(value=False)
+        self.recorded_events: list[tuple[float, str, str]] = []  # (timestamp, "down"/"up", label)
+        self.record_start_time = 0.0
         self.settings_loaded = False
 
         self._load_settings()
@@ -4314,6 +4320,28 @@ class PianoMacroApp(tk.Tk):
     def _synth_note_off(self, midi_note: int) -> None:
         if self.synth and self.synth_enabled.get() and self.synth._handle:
             self.synth.note_off(midi_note)
+
+    def _metronome_tick(self) -> None:
+        if not hasattr(self, "keyboard_canvas"):
+            return
+        self.metronome_active = not self.metronome_active
+        canvas = self.keyboard_canvas
+        if self.metronome_active and hasattr(self, "_metro_rect"):
+            canvas.itemconfigure(self._metro_rect, fill="#ff6b35")
+            self.after(80, lambda: canvas.itemconfigure(self._metro_rect, fill=getattr(self, "_active_field", UI_FIELD)))
+
+    def _draw_metronome_indicator(self) -> None:
+        if not hasattr(self, "keyboard_canvas"):
+            return
+        canvas = self.keyboard_canvas
+        w = canvas.winfo_width()
+        h = canvas.winfo_height()
+        self._metro_rect = canvas.create_rectangle(
+            w - 24, 4, w - 4, 20,
+            fill=getattr(self, "_active_field", UI_FIELD),
+            outline=getattr(self, "_active_accent", UI_ACCENT),
+            tags="metro",
+        )
 
     def _auto_save_tick(self) -> None:
         if self._is_dirty and getattr(self, "current_song_id", None):
@@ -4652,8 +4680,12 @@ class PianoMacroApp(tk.Tk):
         search_btn.grid(row=0, column=6, padx=6)
         self._add_tooltip(search_btn, "Search & download from Online Sequencer")
 
+        self.record_btn = ttk.Button(control_bar, text="Record", command=self.toggle_recording)
+        self.record_btn.grid(row=0, column=7, padx=6)
+        self._add_tooltip(self.record_btn, "Start/stop recording keystrokes as a score")
+
         ttk.Label(control_bar, textvariable=self.loaded_midi_name, style="Muted.TLabel").grid(
-            row=0, column=7, columnspan=7, sticky="e"
+            row=0, column=8, columnspan=6, sticky="e"
         )
 
         paned = ttk.Panedwindow(root, orient=tk.HORIZONTAL)
@@ -4800,6 +4832,10 @@ class PianoMacroApp(tk.Tk):
         row += 1
 
         ttk.Checkbutton(side, text="Loop playback", variable=self.loop_enabled).grid(
+            row=row, column=0, columnspan=2, sticky="w", pady=4
+        )
+        row += 1
+        ttk.Checkbutton(side, text="Metronome", variable=self.metronome_enabled).grid(
             row=row, column=0, columnspan=2, sticky="w", pady=4
         )
         row += 1
@@ -5139,6 +5175,7 @@ class PianoMacroApp(tk.Tk):
             fill=UI_MUTED,
             font=("Segoe UI", 8, "bold"),
         )
+        self._draw_metronome_indicator()
 
     def _apply_keyboard_highlights(self) -> None:
         if not hasattr(self, "keyboard_canvas"):
@@ -5150,7 +5187,20 @@ class PianoMacroApp(tk.Tk):
         for midi_note, rect in self.preview_rects.items():
             active = midi_note in self.preview_active_notes
             is_black = self.preview_is_black.get(midi_note, False)
-            fill = kba if active and is_black else kwa if active else kb if is_black else kw
+            vel = self.preview_note_velocities.get(midi_note, 100) / 127.0
+            if active:
+                if is_black:
+                    r = min(255, int(40 + vel * 215))
+                    g = min(255, int(189 + vel * 66))
+                    b = min(255, int(253 - vel * 60))
+                    fill = f"#{r:02x}{g:02x}{b:02x}"
+                else:
+                    r = min(255, int(135 + vel * 120))
+                    g = min(255, int(220 - vel * 40))
+                    b = min(255, int(255 - vel * 30))
+                    fill = f"#{r:02x}{g:02x}{b:02x}"
+            else:
+                fill = kb if is_black else kw
             self.keyboard_canvas.itemconfigure(rect, fill=fill)
 
     def highlight_midi_notes(self, notes: set[int], add: bool = False) -> None:
@@ -5846,6 +5896,9 @@ class PianoMacroApp(tk.Tk):
             name = self._hotkey_name(key)
             if not name:
                 return
+            if self.recording.get() and self.record_start_time > 0:
+                elapsed = time.perf_counter() - self.record_start_time
+                self.recorded_events.append((elapsed, "down", name))
             if self.hotkey_capture_target is not None:
                 self.after(0, lambda captured=name: self._apply_captured_hotkey(captured))
                 return
@@ -5868,6 +5921,9 @@ class PianoMacroApp(tk.Tk):
             name = self._hotkey_name(key)
             if name:
                 self.pressed_hotkey_parts.discard(name)
+                if self.recording.get() and self.record_start_time > 0:
+                    elapsed = time.perf_counter() - self.record_start_time
+                    self.recorded_events.append((elapsed, "up", name))
 
         self.listener = pynput_keyboard.Listener(on_press=on_press, on_release=on_release)
         self.listener.daemon = True
@@ -6011,7 +6067,91 @@ class PianoMacroApp(tk.Tk):
             return char.lower()
         return None
 
-    def insert_test_scale(self) -> None:
+    def toggle_recording(self) -> None:
+        if self.recording.get():
+            self._stop_recording()
+        else:
+            self._start_recording()
+
+    def _start_recording(self) -> None:
+        self.recorded_events.clear()
+        self.record_start_time = time.perf_counter()
+        self.recording.set(True)
+        self.record_btn.configure(text="Stop Rec", style="Danger.TButton")
+        self.status.set("Recording... Press Record again to stop.")
+
+    def _stop_recording(self) -> None:
+        self.recording.set(False)
+        self.record_btn.configure(text="Record", style="TButton")
+        if not self.recorded_events:
+            self.status.set("Nothing recorded.")
+            return
+        self._build_score_from_recording()
+
+    def _build_score_from_recording(self) -> None:
+        label_to_midi: dict[str, int] = {}
+        for midi_note, binding in KEY_MAP.items():
+            label_to_midi[binding.label.lower()] = midi_note
+
+        notes: list[tuple[float, float, int]] = []
+        active: dict[str, float] = {}
+        for timestamp, action, label in self.recorded_events:
+            clean = label.lower()
+            if action == "down" and clean not in active:
+                active[clean] = timestamp
+            elif action == "up" and clean in active:
+                start = active.pop(clean)
+                midi_note = label_to_midi.get(clean)
+                if midi_note and timestamp > start:
+                    notes.append((start, timestamp, midi_note))
+
+        if not notes:
+            self.status.set("No playable notes recorded.")
+            return
+
+        bpm = max(20.0, float(self.bpm.get()))
+        beat_seconds = 60.0 / bpm
+        tokens: list[str] = []
+        notes.sort(key=lambda n: n[0])
+        cursor = 0.0
+
+        i = 0
+        while i < len(notes):
+            start, end, midi = notes[i]
+            duration = max(0.01, end - start)
+            beats = max(0.25, round(duration / beat_seconds * 4) / 4)
+            chord_notes = [midi]
+            j = i + 1
+            while j < len(notes) and abs(notes[j][0] - start) < 0.05:
+                chord_notes.append(notes[j][2])
+                j += 1
+
+            if start > cursor + 0.01:
+                rest_beats = max(0.25, round((start - cursor) / beat_seconds * 4) / 4)
+                tokens.append(f"R:{PianoMacroApp._format_beats(rest_beats)}")
+
+            names = [midi_to_note_name(n) for n in sorted(set(chord_notes))]
+            if len(names) == 1:
+                token = names[0]
+            else:
+                token = "[" + " ".join(names) + "]"
+            token += f":{PianoMacroApp._format_beats(beats)}"
+            tokens.append(token)
+            cursor = max(cursor, start + beats * beat_seconds)
+            i = j
+
+        text = "\n".join(" ".join(tokens[k:k + 8]) for k in range(0, len(tokens), 8))
+        self.new_song()
+        self.score_text.delete("1.0", tk.END)
+        self.score_text.insert("1.0", text)
+        self.song_title.set("Recording")
+        self.song_notes.set(f"Recorded {len(notes)} notes at {bpm:.0f} BPM.")
+        self.source_mode.set("text")
+        self._mark_dirty()
+        self._update_title()
+        self.status.set(f"Recording loaded: {len(notes)} notes, {len(tokens)} events.")
+        self.analyze_current_source(show_popup=False)
+        self.recorded_events.clear()
         self.loaded_midi_actions = None
         self.loaded_midi_name.set("No MIDI loaded")
         self.source_mode.set("text")
@@ -8074,25 +8214,33 @@ class PianoMacroApp(tk.Tk):
 
                     unique_bindings = list({binding.label: binding for binding in bindings}.values())
                     synth_notes: set[int] = set()
+                    synth_vel_map: dict[int, int] = {}
                     for playable in action.notes:
                         if playable.kind == "midi":
                             fitted = self._fit_midi_note(int(playable.value) + settings.transpose, settings)
                             if fitted is not None:
                                 synth_notes.add(fitted)
+                                synth_vel_map[fitted] = 100
                     if action.action == "down":
                         if not preview_only:
                             for binding in sorted(unique_bindings, key=lambda item: item.shifted):
                                 self.sender.key_down(binding)
-                        for sn in synth_notes:
-                            self._synth_note_on(sn)
+                        for sn, vel in synth_vel_map.items():
+                            self._synth_note_on(sn, vel)
+                            self.preview_note_velocities[sn] = vel
                         if preview_notes:
                             self.highlight_midi_notes(preview_notes, add=True)
+                        if bool(self.metronome_enabled.get()):
+                            beat_pos = action.seconds * settings.bpm / 60.0
+                            if abs(beat_pos - round(beat_pos)) < 0.06:
+                                self.after(0, self._metronome_tick)
                     else:
                         if not preview_only:
                             for binding in unique_bindings:
                                 self.sender.key_up(binding)
                         for sn in synth_notes:
                             self._synth_note_off(sn)
+                            self.preview_note_velocities.pop(sn, None)
                         if preview_notes:
                             self.unhighlight_midi_notes(preview_notes)
 
