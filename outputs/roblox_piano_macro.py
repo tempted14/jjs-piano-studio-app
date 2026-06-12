@@ -4752,7 +4752,7 @@ class PianoMacroApp(tk.Tk):
 
         ttk.Separator(side).grid(row=row, column=0, columnspan=2, sticky="ew", pady=12)
         row += 1
-        ttk.Button(side, text="Toggle Light/Dark Theme", command=self.toggle_theme).grid(
+        ttk.Button(side, text="\u263d  Toggle Light/Dark Theme", command=self.toggle_theme).grid(
             row=row, column=0, columnspan=2, sticky="ew", pady=4
         )
         row += 1
