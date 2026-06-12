@@ -4060,10 +4060,10 @@ def _s(v: int) -> int:
 # Sizes dict - change these to tweak dimensions globally
 _UI_SIZES = {
     # Main window
-    "main_w": _s(1040),
-    "main_h": _s(760),
-    "main_min_w": _s(840),
-    "main_min_h": _s(620),
+    "main_w": _s(1240),
+    "main_h": _s(800),
+    "main_min_w": _s(1020),
+    "main_min_h": _s(680),
     # Keyboard
     "kb_height": _s(132),
     "kb_label_font": ("Segoe UI", _s(7)),
@@ -4443,16 +4443,16 @@ class PianoMacroApp(tk.Tk):
 
         s.configure("Accent.TButton", background=c["accent"], foreground=c["accent_text"],
                      bordercolor=c["accent"], lightcolor=c["accent"], darkcolor=c["accent2"],
-                     focuscolor=c["accent"], padding=(self._s(14), self._s(7)), relief=tk.FLAT, font=("{Segoe UI}", self._s(9), "bold"))
+                     focuscolor=c["accent"], padding=(self._s(12), self._s(6)), relief=tk.FLAT, font=("{Segoe UI}", self._s(9), "bold"))
         s.map("Accent.TButton", background=[("pressed", c["accent2"]), ("active", c["accent"])])
 
         s.configure("Danger.TButton", background=c["danger2"], foreground="#ffffff",
                      bordercolor=c["danger"], lightcolor=c["danger2"], darkcolor=c["danger2"],
-                     focuscolor=c["danger"], padding=(self._s(12), self._s(6)), relief=tk.FLAT)
+                     focuscolor=c["danger"], padding=(self._s(10), self._s(5)), relief=tk.FLAT)
         s.map("Danger.TButton", background=[("pressed", c["danger2"]), ("active", c["danger"])])
 
         s.configure("Icon.TButton", background=c["bg"], foreground=c["text"], bordercolor=c["border"],
-                     lightcolor=c["bg"], darkcolor=c["bg"], focuscolor=c["accent"], padding=(self._s(8), self._s(5)), relief=tk.FLAT)
+                     lightcolor=c["bg"], darkcolor=c["bg"], focuscolor=c["accent"], padding=(self._s(6), self._s(3)), relief=tk.FLAT)
         s.map("Icon.TButton", background=[("pressed", c["field"]), ("active", c["surface2"])])
 
         for sn in ("TEntry", "TSpinbox", "TCombobox"):
@@ -4644,24 +4644,25 @@ class PianoMacroApp(tk.Tk):
         # ── Control bar with icon buttons ──
         control_bar = ttk.Frame(root, padding=(self._ui["controlbar_padx"], self._ui["controlbar_pady"], self._ui["controlbar_padx"], self._s(6)))
         control_bar.grid(row=1, column=0, sticky="ew")
-        for i in range(8):
+        # 9 columns: 6 action btns | nfo (weight=1, fills space) | help | theme
+        for i in range(10):
             control_bar.columnconfigure(i, weight=0)
-        control_bar.columnconfigure(7, weight=1)
+        control_bar.columnconfigure(6, weight=1)
 
-        icons = {"Play": "\u25b6", "Preview": "\u25b7", "Pause": "\u23f8", "Stop": "\u23f9",
-                 "Load MIDI": "\ud83d\udcc2", "Online Search": "\ud83d\udd0d"}
+        icons = {"Play": "▶", "Preview": "▷", "Pause": "⏸", "Stop": "⏹",
+                 "Load": "📂", "Search": "🔍"}
         btns = [
             ("Play", self.start_playback, "Accent.TButton", "Send keystrokes to Roblox (F6)"),
             ("Preview", self.start_preview_playback, "TButton", "Keyboard highlight only, no keystrokes"),
             ("Pause", self.toggle_pause, "TButton", "Pause/resume (F7)"),
             ("Stop", self.stop_playback, "Danger.TButton", "Stop immediately (F8)"),
-            ("Load MIDI", self.load_midi, "TButton", "Import .mid file (Ctrl+O)"),
-            ("Online Search", self.open_online_midi_search_tool, "TButton", "Search Online Sequencer"),
+            ("Load", self.load_midi, "TButton", "Import .mid file (Ctrl+O)"),
+            ("Search", self.open_online_midi_search_tool, "TButton", "Search Online Sequencer (Ctrl+F)"),
         ]
         for idx, (label, cmd, style, tip) in enumerate(btns):
             icon = icons.get(label, "")
             btn = ttk.Button(control_bar, text=f"{icon}  {label}", command=cmd, style=style)
-            btn.grid(row=0, column=idx, padx=(0, 4))
+            btn.grid(row=0, column=idx, padx=(0, self._s(3)))
             self._add_tooltip(btn, tip)
             if label == "Play":
                 self._play_button = btn
@@ -4671,12 +4672,17 @@ class PianoMacroApp(tk.Tk):
                 self._stop_button = btn
 
         nfo = ttk.Label(control_bar, textvariable=self.loaded_midi_name, style="Muted.TLabel")
-        nfo.grid(row=0, column=6, columnspan=2, sticky="e")
+        nfo.grid(row=0, column=6, sticky="e", padx=(self._s(8), self._s(8)))
 
-        help_btn = ttk.Button(control_bar, text="?", width=3, command=self._show_shortcuts)
-        help_btn.grid(row=0, column=5, padx=(4, 4))
+        help_btn = ttk.Button(control_bar, text="?", width=2, command=self._show_shortcuts)
+        help_btn.grid(row=0, column=7, padx=(self._s(2), self._s(2)))
         self._add_tooltip(help_btn, "Show keyboard shortcuts (F1)")
         self.bind_all("<F1>", lambda _e: self._show_shortcuts())
+
+        theme_btn = ttk.Button(control_bar, text="☾", width=2, command=self.toggle_theme)
+        theme_btn.grid(row=0, column=8, padx=(self._s(2), 0))
+        self._add_tooltip(theme_btn, "Toggle Light/Dark theme")
+        self._theme_button = theme_btn
 
         # ── Main paned area ──
         paned = ttk.Panedwindow(root, orient=tk.HORIZONTAL)
