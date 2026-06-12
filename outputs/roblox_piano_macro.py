@@ -4187,7 +4187,7 @@ class PianoMacroApp(tk.Tk):
         self._is_dirty = False
         self._setup_drag_drop()
         self._update_title()
-        self.score_text.bind("<<Modified>>", self._on_text_modified)
+        self.score_text.bind("<<Modified>>", self._on_text_modified, add="+")
         self.song_title.trace_add("write", lambda *_: self._mark_dirty())
         self.song_artist.trace_add("write", lambda *_: self._mark_dirty())
         self.song_tags.trace_add("write", lambda *_: self._mark_dirty())
@@ -4350,7 +4350,8 @@ class PianoMacroApp(tk.Tk):
 
     def _synth_note_on(self, midi_note: int, velocity: int = 100, synth_on: bool = True, synth_vol: int = 100) -> None:
         if self.synth and synth_on and self.synth._handle:
-            vol = max(1, min(127, int(synth_vol * velocity / 100)))
+            vol = max(1, min(127, synth_vol))
+            vol = max(1, min(127, int(vol * velocity / 100)))
             self.synth.note_on(midi_note, vol)
 
     def _synth_note_off(self, midi_note: int, synth_on: bool = True) -> None:
@@ -8511,9 +8512,9 @@ class PianoMacroApp(tk.Tk):
                     target = action.seconds / settings.speed
                     target_deadline = start_time + target
                     now = time.perf_counter()
-                if now < target_deadline:
-                    if not wait_until_precise(target_deadline, self.stop_event, self.pause_event):
-                        continue
+                    if now < target_deadline:
+                        if not wait_until_precise(target_deadline, self.stop_event, self.pause_event):
+                            continue
 
                     bindings: list[KeyBinding] = []
                     preview_notes: set[int] = set()
