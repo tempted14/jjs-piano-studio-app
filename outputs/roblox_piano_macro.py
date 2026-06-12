@@ -8339,11 +8339,14 @@ class PianoMacroApp(tk.Tk):
             settings = self.read_settings()
             preview_only = bool(self.preview_only.get()) if preview_override is None else bool(preview_override)
             actions, source_name = self._actions_for_current_source(settings)
+            print(f"[DEBUG] _start_playback: got {len(actions)} actions from source '{source_name}', mode={self.source_mode.get()}")
             actions = coalesce_scheduled_actions(actions)
+            print(f"[DEBUG] After coalesce: {len(actions)} actions")
             if not actions:
                 raise ValueError("Nothing to play.")
         except Exception as exc:
             messagebox.showerror("Could not start", str(exc))
+            print(f"[DEBUG] _start_playback ERROR: {exc}")
             return
 
         worker_state = {
@@ -8359,6 +8362,7 @@ class PianoMacroApp(tk.Tk):
             "synth_on": bool(self.synth_enabled.get()),
             "synth_vol": int(self.synth_volume.get()),
         }
+        print(f"[DEBUG] worker_state: { {k: v for k, v in worker_state.items() if k != 'synth_vol'} }")
 
         self.stop_event.clear()
         self.pause_event.clear()
@@ -8467,6 +8471,7 @@ class PianoMacroApp(tk.Tk):
         try:
             total = max(action.seconds for action in actions) if actions else 0.0
             loop_total = min(total, loop_end) - loop_start if loop_enabled and loop_end > 0 else total
+            print(f"[DEBUG] _play_worker: {len(actions)} actions, total={total:.2f}s, preview_only={preview_only}, loop_enabled={loop_enabled}, loop_start={loop_start}, loop_end={loop_end}")
             if preview_only:
                 self._thread_status(f"Previewing {source_name}. No keys are being sent.")
             else:
@@ -8474,7 +8479,9 @@ class PianoMacroApp(tk.Tk):
                     f"Starting {source_name} with {self.sender.method} in {settings.start_delay:g}s. "
                     "Focus Roblox now."
                 )
+                print(f"[DEBUG] Waiting {settings.start_delay}s start delay...")
                 if not wait_until_precise(time.perf_counter() + settings.start_delay, self.stop_event):
+                    print("[DEBUG] Playback cancelled during start delay")
                     return
 
             while True:
@@ -8490,20 +8497,25 @@ class PianoMacroApp(tk.Tk):
                     action_start_idx = 0
 
                 index = action_start_idx
+                print(f"[DEBUG] Starting pass loop_count={loop_count}, action_start_idx={index}, speed={settings.speed}")
                 while index < len(actions):
                     if self.stop_event.is_set():
+                        print("[DEBUG] Stop event detected, returning")
                         return
                     if self.pause_event.is_set():
+                        print("[DEBUG] Pause event detected, waiting...")
                         pause_started = time.perf_counter()
                         while self.pause_event.is_set():
                             if self.stop_event.is_set():
                                 return
                             time.sleep(0.02)
                         start_time += time.perf_counter() - pause_started
+                        print(f"[DEBUG] Resumed after pause")
                         continue
 
                     action = actions[index]
                     if loop_enabled and loop_end > 0 and action.seconds > loop_end:
+                        print(f"[DEBUG] Action at {action.seconds:.3f}s past loop_end {loop_end}, breaking")
                         break
                     if loop_enabled and loop_start > 0 and loop_count == 0 and action.seconds < loop_start:
                         index += 1
@@ -8525,6 +8537,7 @@ class PianoMacroApp(tk.Tk):
                         preview_note = self._resolved_midi_note_for_preview(playable, settings)
                         if preview_note is not None:
                             preview_notes.add(preview_note)
+                    print(f"[DEBUG] Action #{index} at {action.seconds:.3f}s {action.action}: {len(bindings)} bindings, {len(preview_notes)} preview_notes, notes={[(p.kind, p.value) for p in action.notes[:4]]}")
 
                     unique_bindings = list({binding.label: binding for binding in bindings}.values())
                     synth_notes: set[int] = set()
@@ -8566,6 +8579,7 @@ class PianoMacroApp(tk.Tk):
                     index += 1
 
                 loop_count += 1
+                print(f"[DEBUG] Pass complete, loop_count={loop_count}, practice={practice}")
                 if practice:
                     steps_done = loop_count // loops_per_step
                     new_speed = min(target_speed, current_speed + steps_done * increment)
