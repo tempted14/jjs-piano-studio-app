@@ -4039,12 +4039,143 @@ class KeySender:
             self.shift_down = False
 
 
+# ── UI sizing module (DPI-aware) ─────────────────────────────────
+# All hardcoded pixel dimensions are defined here. They can be scaled
+# automatically on high-DPI displays via the SCALE environment variable.
+import os as _os
+
+_BASE_SCALE = 1.0
+try:
+    _dpi_env = float(_os.environ.get("JJS_DPI_SCALE", "1.0"))
+    if 0.5 <= _dpi_env <= 3.0:
+        _BASE_SCALE = _dpi_env
+except (ValueError, TypeError):
+    pass
+
+def _s(v: int) -> int:
+    """Scale a pixel value by the base scale factor."""
+    return max(1, int(round(v * _BASE_SCALE)))
+
+
+# Sizes dict - change these to tweak dimensions globally
+_UI_SIZES = {
+    # Main window
+    "main_w": _s(1040),
+    "main_h": _s(760),
+    "main_min_w": _s(840),
+    "main_min_h": _s(620),
+    # Keyboard
+    "kb_height": _s(132),
+    "kb_label_font": ("Segoe UI", _s(7)),
+    "kb_range_font": ("Segoe UI", _s(8), "bold"),
+    "kb_c2_c7_font": ("Segoe UI", _s(8), "bold"),
+    # Text editor
+    "editor_font": ("Consolas", _s(11)),
+    "editor_padx": _s(10),
+    "editor_pady": _s(10),
+    # Line numbers
+    "line_num_width": _s(40),
+    "line_num_pad": _s(34),
+    "line_num_font": ("Consolas", _s(9)),
+    "line_num_height": _s(17),
+    # Header
+    "header_height": _s(52),
+    "header_logo_size": _s(20),
+    "header_title_size": _s(15),
+    # Control bar
+    "controlbar_padx": _s(12),
+    "controlbar_pady": _s(10),
+    # Status bar
+    "statusbar_pady": _s(4),
+    # Progress
+    "progress_padx": _s(12),
+    # Panes
+    "pane_padding_l": _s(12),
+    "pane_padding_r": _s(6),
+    "pane_padding_c": _s(6),
+    "pane_padding_right": _s(12),
+    # Library
+    "library_height": _s(12),
+    # Buttons
+    "btn_padx": _s(12),
+    "btn_pady": _s(6),
+    "btn_font": ("{Segoe UI}", _s(9)),
+    "btn_padx_small": _s(8),
+    "btn_pady_small": _s(5),
+    "btn_font_small": ("{Segoe UI}", _s(9)),
+    # Spinbox/Entry
+    "field_padx": _s(6),
+    # Status font
+    "status_font": ("{Segoe UI}", _s(10)),
+    # Treeview
+    "treeview_rowheight": _s(28),
+    # Search history
+    "history_btn_width": _s(3),
+    # Section header
+    "section_font": ("{Segoe UI}", _s(10), "bold"),
+    "title_font": ("{Segoe UI}", _s(18), "bold"),
+    "main_font": ("{Segoe UI}", _s(10)),
+    # Dialogs
+    "shortcuts_w": _s(420),
+    "shortcuts_h": _s(480),
+    "shortcuts_pad": _s(20),
+    "shortcuts_font": ("Consolas", _s(10)),
+    "timeline_w": _s(880),
+    "timeline_h": _s(520),
+    "timeline_min_w": _s(760),
+    "timeline_min_h": _s(440),
+    "search_w": _s(900),
+    "search_h": _s(640),
+    "search_min_w": _s(780),
+    "search_min_h": _s(540),
+    # Various paddings
+    "dialog_padding": _s(16),
+    "sidebar_padding": _s(0),
+    "treeview_heading_pad": _s(8),
+    "listbox_height": _s(12),
+    # Scrollbar
+    "scrollbar_width": _s(10),
+    "sash_width": _s(3),
+    "scale_thickness": _s(8),
+    # Metronome
+    "metro_offset": _s(20),
+    "metro_size": _s(16),
+    # Tip font
+    "tip_font": ("Segoe UI", _s(9)),
+}
+
+
+def _scale_pixel(v: int) -> int:
+    """Public helper to scale a pixel value (for runtime scaling decisions)."""
+    return _s(v)
+
+
 class PianoMacroApp(tk.Tk):
+    def _compute_scale_factor(self) -> float:
+        """Compute the DPI scale factor for this window's display.
+
+        On a 96-DPI display this returns 1.0. On a 144-DPI display
+        (150% scaling) it returns ~1.5. Used to scale hardcoded pixel
+        values so the UI looks consistent across display configurations.
+        """
+        try:
+            # Tk's winfo_fpixels('1i') gives actual pixels per inch
+            return float(self.winfo_fpixels("1i")) / 96.0
+        except Exception:
+            return 1.0
+
+    def _s(self, v: int) -> int:
+        """Scale a pixel value by the computed scale factor (int rounds)."""
+        return max(1, int(round(v * self._scale)))
+
     def __init__(self) -> None:
         super().__init__()
+        # Compute DPI scale factor early so all subsequent dimensions scale.
+        self._scale = self._compute_scale_factor()
+        self._ui = _UI_SIZES  # reference to sizing module
         self.title(APP_TITLE)
-        self.geometry("1040x760")
-        self.minsize(840, 620)
+        self.geometry(f"{self._ui['main_w']}x{self._ui['main_h']}")
+        self.minsize(self._ui['main_min_w'], self._ui['main_min_h'])
         self._configure_theme()
 
         self.sender = KeySender()
@@ -4072,6 +4203,7 @@ class PianoMacroApp(tk.Tk):
         self.preview_text: dict[int, list[int]] = {}
         self.preview_is_black: dict[int, bool] = {}
         self.preview_active_notes: set[int] = set()
+        self.scale_highlighted: set[int] | None = None
         self.listener = None
         self.pressed_hotkey_parts: set[str] = set()
         self.hotkey_capture_target: tuple[str, tk.StringVar] | None = None
@@ -4160,11 +4292,11 @@ class PianoMacroApp(tk.Tk):
             last_line = int(last_idx.split(".")[0])
         except Exception:
             return
-        line_h = 17
+        line_h = self._ui["line_num_height"]
         for ln in range(first_line, last_line + 1):
-            y = (ln - first_line) * line_h + 4
-            canvas.create_text(34, y, text=str(ln), fill=c["muted"], font=("Consolas", 9), anchor="ne")
-        canvas.create_line(39, 0, 39, canvas.winfo_height(), fill=c["border"])
+            y = (ln - first_line) * line_h + self._s(4)
+            canvas.create_text(self._ui["line_num_pad"], y, text=str(ln), fill=c["muted"], font=("Consolas", self._s(9)), anchor="ne")
+        canvas.create_line(self._s(39), 0, self._s(39), canvas.winfo_height(), fill=c["border"])
         self._mark_dirty()
 
     def _update_title(self) -> None:
@@ -4295,11 +4427,11 @@ class PianoMacroApp(tk.Tk):
         s.configure(".", background=c["bg"], foreground=c["text"], font="{Segoe UI} 10")
         s.configure("TFrame", background=c["bg"])
         s.configure("TLabel", background=c["bg"], foreground=c["text"])
-        s.configure("Title.TLabel", font=("{Segoe UI}", 18, "bold"), foreground=c["text"], background=c["bg"])
-        s.configure("Section.TLabel", font=("{Segoe UI}", 10, "bold"), foreground=c["text"], background=c["bg"])
+        s.configure("Title.TLabel", font=("{Segoe UI}", self._s(18), "bold"), foreground=c["text"], background=c["bg"])
+        s.configure("Section.TLabel", font=("{Segoe UI}", self._s(10), "bold"), foreground=c["text"], background=c["bg"])
         s.configure("Muted.TLabel", foreground=c["muted"], background=c["bg"])
         s.configure("Status.TLabel", foreground=c["accent"], background=c["bg"])
-        s.configure("Header.TLabel", foreground="#ffffff", background=c["header_bg"], font=("{Segoe UI}", 18, "bold"))
+        s.configure("Header.TLabel", foreground="#ffffff", background=c["header_bg"], font=("{Segoe UI}", self._s(18), "bold"))
 
         btn = {"background": c["surface"], "foreground": c["text"], "bordercolor": c["border"],
                "lightcolor": c["surface"], "darkcolor": c["surface"], "focuscolor": c["accent"],
@@ -4311,16 +4443,16 @@ class PianoMacroApp(tk.Tk):
 
         s.configure("Accent.TButton", background=c["accent"], foreground=c["accent_text"],
                      bordercolor=c["accent"], lightcolor=c["accent"], darkcolor=c["accent2"],
-                     focuscolor=c["accent"], padding=(14, 7), relief=tk.FLAT, font=("{Segoe UI}", 9, "bold"))
+                     focuscolor=c["accent"], padding=(self._s(14), self._s(7)), relief=tk.FLAT, font=("{Segoe UI}", self._s(9), "bold"))
         s.map("Accent.TButton", background=[("pressed", c["accent2"]), ("active", c["accent"])])
 
         s.configure("Danger.TButton", background=c["danger2"], foreground="#ffffff",
                      bordercolor=c["danger"], lightcolor=c["danger2"], darkcolor=c["danger2"],
-                     focuscolor=c["danger"], padding=(12, 6), relief=tk.FLAT)
+                     focuscolor=c["danger"], padding=(self._s(12), self._s(6)), relief=tk.FLAT)
         s.map("Danger.TButton", background=[("pressed", c["danger2"]), ("active", c["danger"])])
 
         s.configure("Icon.TButton", background=c["bg"], foreground=c["text"], bordercolor=c["border"],
-                     lightcolor=c["bg"], darkcolor=c["bg"], focuscolor=c["accent"], padding=(8, 5), relief=tk.FLAT)
+                     lightcolor=c["bg"], darkcolor=c["bg"], focuscolor=c["accent"], padding=(self._s(8), self._s(5)), relief=tk.FLAT)
         s.map("Icon.TButton", background=[("pressed", c["field"]), ("active", c["surface2"])])
 
         for sn in ("TEntry", "TSpinbox", "TCombobox"):
@@ -4330,23 +4462,23 @@ class PianoMacroApp(tk.Tk):
                   foreground=[("readonly", c["text"]), ("disabled", c["muted"])],
                   bordercolor=[("focus", c["accent"]), ("active", c["accent"])])
 
-        s.configure("TCheckbutton", background=c["bg"], foreground=c["text"], focuscolor=c["accent"], padding=(0, 3))
+        s.configure("TCheckbutton", background=c["bg"], foreground=c["text"], focuscolor=c["accent"], padding=(0, self._s(3)))
         s.map("TCheckbutton", foreground=[("disabled", c["muted"])])
-        s.configure("Horizontal.TProgressbar", troughcolor=c["field"], background=c["accent"], bordercolor=c["border"], thickness=8)
+        s.configure("Horizontal.TProgressbar", troughcolor=c["field"], background=c["accent"], bordercolor=c["border"], thickness=self._ui["scale_thickness"])
         s.configure("TSeparator", background=c["border"])
-        s.configure("TPanedwindow", background=c["bg"], sashwidth=3)
-        s.configure("TScrollbar", background=c["surface"], troughcolor=c["field"], bordercolor=c["bg"], arrowcolor=c["muted"], width=10)
+        s.configure("TPanedwindow", background=c["bg"], sashwidth=self._ui["sash_width"])
+        s.configure("TScrollbar", background=c["surface"], troughcolor=c["field"], bordercolor=c["bg"], arrowcolor=c["muted"], width=self._ui["scrollbar_width"])
         s.map("TScrollbar", background=[("active", c["surface2"])], arrowcolor=[("active", c["text"])])
         s.configure("Horizontal.TScale", background=c["bg"], troughcolor=c["field"], bordercolor=c["border"])
 
         s.configure("Treeview", background=c["field"], foreground=c["text"], fieldbackground=c["field"],
-                     bordercolor=c["border"], rowheight=28)
+                     bordercolor=c["border"], rowheight=self._ui["treeview_rowheight"])
         s.configure("Treeview.Heading", background=c["surface"], foreground=c["text"], bordercolor=c["border"],
-                     font=("{Segoe UI}", 9, "bold"), padding=(8, 6))
+                     font=("{Segoe UI}", self._s(9), "bold"), padding=(self._s(8), self._s(6)))
         s.map("Treeview", background=[("selected", c["selection"])], foreground=[("selected", c["text"])])
 
         s.configure("TNotebook", background=c["bg"], bordercolor=c["border"], tabmargins=(2, 2, 2, 0))
-        s.configure("TNotebook.Tab", background=c["surface"], foreground=c["text"], bordercolor=c["border"], padding=(14, 6))
+        s.configure("TNotebook.Tab", background=c["surface"], foreground=c["text"], bordercolor=c["border"], padding=(self._s(14), self._s(6)))
         s.map("TNotebook.Tab", background=[("selected", c["field"])], foreground=[("selected", c["accent"])])
 
         self._active_bg = c["bg"]
@@ -4397,12 +4529,12 @@ class PianoMacroApp(tk.Tk):
         c = getattr(self, "_c", {"bg": "#1a1a1a", "text": "#e6e6e6", "accent": "#58a6ff", "muted": "#888"})
         win = tk.Toplevel(self)
         win.title("Shortcuts")
-        win.geometry("420x480")
+        win.geometry(f"{self._ui['shortcuts_w']}x{self._ui['shortcuts_h']}")
         win.configure(bg=c["bg"])
         win.transient(self)
-        frame = ttk.Frame(win, padding=20)
+        frame = ttk.Frame(win, padding=self._ui['shortcuts_pad'])
         frame.pack(fill=tk.BOTH, expand=True)
-        lbl = tk.Label(frame, text=text, bg=c["bg"], fg=c["text"], font=("Consolas", 10), justify=tk.LEFT, anchor="nw")
+        lbl = tk.Label(frame, text=text, bg=c["bg"], fg=c["text"], font=("Consolas", self._s(10)), justify=tk.LEFT, anchor="nw")
         lbl.pack(fill=tk.BOTH, expand=True)
         ttk.Button(frame, text="Close", command=win.destroy).pack(pady=(12, 0))
 
@@ -4429,7 +4561,7 @@ class PianoMacroApp(tk.Tk):
             selectbackground=c["selection"], selectforeground=c["text"],
             relief=tk.FLAT, borderwidth=0, highlightthickness=1,
             highlightbackground=c["border"], highlightcolor=c["accent"],
-            padx=10, pady=10,
+            padx=self._s(10), pady=self._s(10),
         )
 
     def _style_listbox(self, widget: tk.Listbox) -> None:
@@ -4439,7 +4571,7 @@ class PianoMacroApp(tk.Tk):
             bg=c["field"], fg=c["text"], selectbackground=c["selection"],
             selectforeground=c["text"], activestyle="none", relief=tk.FLAT,
             borderwidth=0, highlightthickness=1, highlightbackground=c["border"],
-            highlightcolor=c["accent"], font=("Segoe UI", 10),
+            highlightcolor=c["accent"], font=("Segoe UI", self._s(10)),
         )
 
     @staticmethod
@@ -4453,7 +4585,7 @@ class PianoMacroApp(tk.Tk):
                 text=text,
                 bg=UI_SURFACE_HOVER,
                 fg=UI_TEXT,
-                font=("Segoe UI", 9),
+                font=("Segoe UI", self._s(9)),
                 relief=tk.FLAT,
                 padx=8,
                 pady=3,
@@ -4502,15 +4634,15 @@ class PianoMacroApp(tk.Tk):
         root.rowconfigure(2, weight=1)
 
         # ── Sleek header bar ──
-        header = tk.Canvas(root, height=52, bg=c["header_bg"], highlightthickness=0)
+        header = tk.Canvas(root, height=self._ui["header_height"], bg=c["header_bg"], highlightthickness=0)
         header.grid(row=0, column=0, sticky="ew")
-        header.create_text(20, 26, text="\u266b", fill=c["accent"], font=("Segoe UI", 20), anchor="w")
-        header.create_text(52, 27, text=APP_TITLE, fill="#ffffff", font=("{Segoe UI}", 15, "bold"), anchor="w")
+        header.create_text(self._s(20), self._s(26), text="♫", fill=c["accent"], font=("Segoe UI", self._s(20)), anchor="w")
+        header.create_text(self._s(52), self._s(27), text=APP_TITLE, fill="#ffffff", font=("{Segoe UI}", self._s(15), "bold"), anchor="w")
         header_sep = tk.Frame(root, height=1, bg=c["header_border"])
         header_sep.grid(row=0, column=0, sticky="ew")
 
         # ── Control bar with icon buttons ──
-        control_bar = ttk.Frame(root, padding=(12, 10, 12, 6))
+        control_bar = ttk.Frame(root, padding=(self._ui["controlbar_padx"], self._ui["controlbar_pady"], self._ui["controlbar_padx"], self._s(6)))
         control_bar.grid(row=1, column=0, sticky="ew")
         for i in range(8):
             control_bar.columnconfigure(i, weight=0)
@@ -4592,10 +4724,10 @@ class PianoMacroApp(tk.Tk):
             side=tk.RIGHT, padx=(6, 0)
         )
 
-        self.score_text = tk.Text(editor_frame, wrap=tk.WORD, undo=True, font=("Consolas", 11), padx=48)
+        self.score_text = tk.Text(editor_frame, wrap=tk.WORD, undo=True, font=("Consolas", self._s(11)), padx=self._s(48))
         self.score_text.grid(row=2, column=0, sticky="nsew", pady=(4, 0))
         self._style_text_widget(self.score_text)
-        self._line_numbers = tk.Canvas(editor_frame, width=40, bg=c["field"], highlightthickness=0)
+        self._line_numbers = tk.Canvas(editor_frame, width=self._ui["line_num_width"], bg=c["field"], highlightthickness=0)
         self._line_numbers.place(in_=self.score_text, relx=0, rely=0, relheight=1, x=0, y=0, anchor="nw")
         self.score_text.bind("<<Modified>>", lambda _e: (self._on_text_modified(), self._mark_dirty(), self._update_line_numbers()))
         self.song_title.trace_add("write", lambda *_: self._mark_dirty())
@@ -4615,7 +4747,7 @@ class PianoMacroApp(tk.Tk):
         keyboard_frame.columnconfigure(0, weight=1)
         ttk.Label(keyboard_frame, text="\u266b  Preview keyboard", style="Section.TLabel").grid(row=0, column=0, sticky="w")
         self.keyboard_canvas = tk.Canvas(
-            keyboard_frame, height=132, bg=c["field"],
+            keyboard_frame, height=self._ui["kb_height"], bg=c["field"],
             highlightthickness=1, highlightbackground=c["border"], highlightcolor=c["accent"],
         )
         self.keyboard_canvas.grid(row=1, column=0, sticky="ew", pady=(6, 0))
@@ -4805,7 +4937,7 @@ class PianoMacroApp(tk.Tk):
         ttk.Progressbar(root, variable=self.progress, maximum=100).grid(row=3, column=0, sticky="ew", pady=(8, 0), padx=12)
 
         status_bar = ttk.Frame(root)
-        status_bar.grid(row=4, column=0, sticky="ew", padx=12, pady=(4, 6))
+        status_bar.grid(row=4, column=0, sticky="ew", padx=self._ui["progress_padx"], pady=(self._s(4), self._s(6)))
         status_bar.columnconfigure(0, weight=1)
         ttk.Label(status_bar, textvariable=self.status, style="Status.TLabel").grid(row=0, column=0, sticky="w")
 
@@ -4844,7 +4976,7 @@ class PianoMacroApp(tk.Tk):
         list_frame.columnconfigure(0, weight=1)
         list_frame.rowconfigure(0, weight=1)
 
-        self.library_listbox = tk.Listbox(list_frame, height=12, activestyle="dotbox", exportselection=False)
+        self.library_listbox = tk.Listbox(list_frame, height=self._ui["library_height"], activestyle="dotbox", exportselection=False)
         self.library_listbox.grid(row=0, column=0, sticky="nsew")
         self._style_listbox(self.library_listbox)
         scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.library_listbox.yview)
@@ -4932,9 +5064,9 @@ class PianoMacroApp(tk.Tk):
             rect = canvas.create_rectangle(x0, 0, x1, white_height, fill="", outline=out_c, width=1, tags="kb")
             binding = KEY_MAP[midi_note]
             canvas.create_text((x0+x1)/2, white_height-22, text=midi_to_note_name(midi_note),
-                              fill="#8899aa", font=("Segoe UI", 7), tags="kb")
+                              fill="#8899aa", font=("Segoe UI", self._s(7)), tags="kb")
             canvas.create_text((x0+x1)/2, white_height-7, text=binding.label,
-                              fill="#556677", font=("Segoe UI", 8, "bold"), tags="kb")
+                              fill="#556677", font=("Segoe UI", self._s(8), "bold"), tags="kb")
             self.preview_rects[midi_note] = rect
             self.preview_is_black[midi_note] = False
 
@@ -4957,16 +5089,16 @@ class PianoMacroApp(tk.Tk):
                 g = int(int(top_c[3:5],16)*(1-t)+int(bot_c[3:5],16)*t)
                 b = int(int(top_c[5:7],16)*(1-t)+int(bot_c[5:7],16)*t)
                 canvas.create_line(x0+2, step, x1-2, step, fill=f"#{r:02x}{g:02x}{b:02x}", tags="kb")
-            canvas.create_rectangle(x0+1, black_height, x1-1, black_height+3, fill="#00000020", outline="", tags="kb")
+            canvas.create_rectangle(x0+1, black_height, x1-1, black_height+3, fill="#000000", outline="", tags="kb")
             rect = canvas.create_rectangle(x0, 0, x1, black_height, fill="", outline="#0a0d12", width=1, tags="kb")
             binding = KEY_MAP[midi_note]
             canvas.create_text((x0+x1)/2, black_height-12, text=binding.label,
-                              fill="#ffffffcc", font=("Segoe UI", 7, "bold"), tags="kb")
+                              fill="#cccccc", font=("Segoe UI", self._s(7), "bold"), tags="kb")
             self.preview_rects[midi_note] = rect
             self.preview_is_black[midi_note] = True
 
-        canvas.create_text(10, height-10, anchor="sw", text="C2", fill=c["muted"], font=("Segoe UI", 8, "bold"))
-        canvas.create_text(width-10, height-10, anchor="se", text="C7", fill=c["muted"], font=("Segoe UI", 8, "bold"))
+        canvas.create_text(10, height-10, anchor="sw", text="C2", fill=c["muted"], font=("Segoe UI", self._s(8), "bold"))
+        canvas.create_text(width-10, height-10, anchor="se", text="C7", fill=c["muted"], font=("Segoe UI", self._s(8), "bold"))
 
     def _apply_keyboard_highlights(self) -> None:
         if not hasattr(self, "keyboard_canvas"):
@@ -5850,8 +5982,8 @@ class PianoMacroApp(tk.Tk):
 
         window = tk.Toplevel(self)
         window.title("Timeline Editor")
-        window.geometry("880x520")
-        window.minsize(760, 440)
+        window.geometry(f"{self._ui['timeline_w']}x{self._ui['timeline_h']}")
+        window.minsize(self._ui['timeline_min_w'], self._ui['timeline_min_h'])
         c = getattr(self, "_c", {"bg": UI_BG, "field": UI_FIELD, "border": UI_BORDER, "accent": UI_ACCENT})
         window.configure(bg=c["bg"])
         window.transient(self)
@@ -6031,8 +6163,8 @@ class PianoMacroApp(tk.Tk):
     def open_online_midi_search_tool(self) -> None:
         window = tk.Toplevel(self)
         window.title("Online MIDI Search")
-        window.geometry("900x640")
-        window.minsize(780, 540)
+        window.geometry(f"{self._ui['search_w']}x{self._ui['search_h']}")
+        window.minsize(self._ui['search_min_w'], self._ui['search_min_h'])
         c = getattr(self, "_c", {"bg": UI_BG, "surface": UI_SURFACE, "surface2": UI_SURFACE_HOVER, "text": UI_TEXT})
         window.configure(bg=c["bg"])
         window.transient(self)
@@ -6981,8 +7113,31 @@ class PianoMacroApp(tk.Tk):
 
 
 def main() -> None:
+    _set_dpi_awareness()
     app = PianoMacroApp()
     app.mainloop()
+
+
+def _set_dpi_awareness() -> None:
+    """Enable per-monitor DPI awareness on Windows for sharp rendering on
+    high-resolution displays. Must be called BEFORE the Tk root window is
+    created. On non-Windows or if the API is unavailable, this is a no-op.
+    """
+    if not sys.platform.startswith("win"):
+        return
+    try:
+        # Per-monitor V2 DPI awareness (Windows 10 1703+)
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:
+        try:
+            # Fallback: system DPI awareness
+            ctypes.windll.shcore.SetProcessDpiAwareness(1)
+        except Exception:
+            try:
+                # Legacy: per-monitor V1
+                ctypes.windll.user32.SetProcessDPIAware()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":
