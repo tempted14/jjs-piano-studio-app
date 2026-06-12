@@ -4210,6 +4210,24 @@ class PianoMacroApp(tk.Tk):
         self.score_text.edit_modified(False)
         self._mark_dirty()
 
+    def _update_line_numbers(self, _event: object = None) -> None:
+        if not hasattr(self, "_line_numbers"):
+            return
+        canvas = self._line_numbers
+        canvas.delete("all")
+        c = getattr(self, "_c", {"field": UI_FIELD, "muted": UI_MUTED, "border": UI_BORDER})
+        first = self.score_text.index("@0,0")
+        last = self.score_text.index(f"@0,{self.score_text.winfo_height()}")
+        first_line = int(first.split(".")[0])
+        last_line = int(last.split(".")[0])
+        line_height = 17
+        for line_num in range(first_line, last_line + 1):
+            y = (line_num - first_line) * line_height + 4
+            canvas.create_text(38, y, text=str(line_num), fill=c["muted"],
+                              font=("Consolas", 9), anchor="ne")
+        canvas.configure(width=44)
+        canvas.create_line(43, 0, 43, canvas.winfo_height(), fill=c["border"])
+
     def _update_title(self) -> None:
         title = f"{'*' if self._is_dirty else ''}{APP_TITLE}"
         song = self.song_title.get().strip() or "Untitled Song"
@@ -4327,23 +4345,22 @@ class PianoMacroApp(tk.Tk):
     def _metronome_tick(self) -> None:
         if not hasattr(self, "keyboard_canvas"):
             return
+        c = getattr(self, "_c", {"field": UI_FIELD})
         self.metronome_active = not self.metronome_active
         canvas = self.keyboard_canvas
         if self.metronome_active and hasattr(self, "_metro_rect"):
             canvas.itemconfigure(self._metro_rect, fill="#ff6b35")
-            self.after(80, lambda: canvas.itemconfigure(self._metro_rect, fill=getattr(self, "_active_field", UI_FIELD)))
+            self.after(80, lambda: canvas.itemconfigure(self._metro_rect, fill=c["field"]))
 
     def _draw_metronome_indicator(self) -> None:
         if not hasattr(self, "keyboard_canvas"):
             return
         canvas = self.keyboard_canvas
         w = canvas.winfo_width()
-        h = canvas.winfo_height()
+        c = getattr(self, "_c", {"field": UI_FIELD, "accent": UI_ACCENT})
         self._metro_rect = canvas.create_rectangle(
             w - 24, 4, w - 4, 20,
-            fill=getattr(self, "_active_field", UI_FIELD),
-            outline=getattr(self, "_active_accent", UI_ACCENT),
-            tags="metro",
+            fill=c["field"], outline=c["accent"], tags="metro",
         )
 
     def _highlight_scale(self) -> None:
@@ -4488,110 +4505,112 @@ class PianoMacroApp(tk.Tk):
     def _configure_theme(self) -> None:
         self._is_dark_theme = getattr(self, "_is_dark_theme", True)
         if self._is_dark_theme:
-            bg, surface, surface_hover, field, border = UI_BG, UI_SURFACE, UI_SURFACE_HOVER, UI_FIELD, UI_BORDER
-            text, muted, accent, accent_dark, accent_text = UI_TEXT, UI_MUTED, UI_ACCENT, UI_ACCENT_DARK, UI_ACCENT_TEXT
-            danger, danger_dark, selection = UI_DANGER, UI_DANGER_DARK, UI_SELECTION
+            self._c = {
+                "bg": "#0a0e14", "surface": "#12171f", "surface2": "#181e28",
+                "field": "#0d1119", "border": "#1e2a3a", "accent": "#58a6ff",
+                "accent2": "#1f6feb", "accent_text": "#ffffff",
+                "text": "#c9d1d9", "muted": "#6e7681", "danger": "#f85149",
+                "danger2": "#da3633", "selection": "#1f3a5f",
+                "header_bg": "#0d1117", "header_border": "#21262d",
+                "kw": "#e3e8ed", "kb": "#161b22", "kwa": "#79c0ff", "kba": "#58a6ff",
+                "ko": "#30363d", "success": "#3fb950", "warning": "#d29922",
+            }
         else:
-            bg, surface, surface_hover = "#f0f2f5", "#ffffff", "#e4e6eb"
-            field, border = "#ffffff", "#ccd0d5"
-            text, muted = "#1c1e21", "#606770"
-            accent, accent_dark, accent_text = "#1877f2", "#166fe5", "#ffffff"
-            danger, danger_dark, selection = "#e41e3f", "#c41a34", "#d2e3fc"
+            self._c = {
+                "bg": "#f6f8fa", "surface": "#ffffff", "surface2": "#f0f2f5",
+                "field": "#ffffff", "border": "#d0d7de", "accent": "#0969da",
+                "accent2": "#0550ae", "accent_text": "#ffffff",
+                "text": "#1f2328", "muted": "#656d76", "danger": "#cf222e",
+                "danger2": "#a40e26", "selection": "#ddf4ff",
+                "header_bg": "#24292f", "header_border": "#3a3f47",
+                "kw": "#f6f8fa", "kb": "#1f2328", "kwa": "#54aeff", "kba": "#0969da",
+                "ko": "#d0d7de", "success": "#1a7f37", "warning": "#9a6700",
+            }
+        c = self._c
 
-        self.configure(bg=bg)
+        self.configure(bg=c["bg"])
         self.option_add("*Font", UI_FONT)
-        self.option_add("*Menu.background", surface)
-        self.option_add("*Menu.foreground", text)
-        self.option_add("*Menu.activeBackground", surface_hover)
-        self.option_add("*Menu.activeForeground", text)
+        self.option_add("*Menu.background", c["surface"])
+        self.option_add("*Menu.foreground", c["text"])
 
         self.style = ttk.Style(self)
         try:
             self.style.theme_use("clam")
         except tk.TclError:
             pass
+        s = self.style
 
-        style = self.style
-        style.configure(".", background=bg, foreground=text, font=UI_FONT)
-        style.configure("TFrame", background=bg)
-        style.configure("TLabel", background=bg, foreground=text)
-        style.configure("Title.TLabel", background=bg, foreground=text, font=UI_TITLE_FONT)
-        style.configure("Section.TLabel", background=bg, foreground=text, font=UI_SECTION_FONT)
-        style.configure("Muted.TLabel", background=bg, foreground=muted)
-        style.configure("Status.TLabel", background=bg, foreground=accent)
+        s.configure(".", background=c["bg"], foreground=c["text"], font=UI_FONT)
+        s.configure("TFrame", background=c["bg"])
+        s.configure("Surface.TFrame", background=c["surface"])
+        s.configure("TLabel", background=c["bg"], foreground=c["text"])
+        s.configure("Title.TLabel", font=("{Segoe UI}", 18, "bold"), foreground=c["text"], background=c["bg"])
+        s.configure("Section.TLabel", font=("{Segoe UI}", 10, "bold"), foreground=c["text"], background=c["bg"])
+        s.configure("Muted.TLabel", foreground=c["muted"], background=c["bg"])
+        s.configure("Status.TLabel", foreground=c["accent"], background=c["bg"])
+        s.configure("Header.TLabel", foreground="#ffffff", background=c["header_bg"], font=("{Segoe UI}", 18, "bold"))
 
-        button_options = {
-            "background": surface,
-            "foreground": text,
-            "bordercolor": border,
-            "lightcolor": surface,
-            "darkcolor": surface,
-            "focuscolor": accent,
-            "padding": (11, 7),
-            "relief": tk.FLAT,
-        }
-        style.configure("TButton", **button_options)
-        style.map("TButton", background=[("pressed", field), ("active", surface_hover)],
-                   foreground=[("disabled", muted), ("active", text)],
-                   bordercolor=[("focus", accent), ("active", accent)])
+        btn = {"background": c["surface"], "foreground": c["text"], "bordercolor": c["border"],
+               "lightcolor": c["surface"], "darkcolor": c["surface"], "focuscolor": c["accent"],
+               "padding": (12, 6), "relief": tk.FLAT, "font": ("{Segoe UI}", 9)}
+        s.configure("TButton", **btn)
+        s.map("TButton", background=[("pressed", c["field"]), ("active", c["surface2"])],
+               foreground=[("disabled", c["muted"]), ("active", c["text"])],
+               bordercolor=[("focus", c["accent"]), ("active", c["accent"])])
 
-        style.configure("Accent.TButton", background=accent, foreground=accent_text,
-                         bordercolor=accent, lightcolor=accent, darkcolor=accent_dark,
-                         focuscolor=accent, padding=(12, 7), relief=tk.FLAT)
-        style.map("Accent.TButton", background=[("pressed", accent_dark), ("active", accent)],
-                   foreground=[("disabled", muted), ("active", accent_text)])
+        s.configure("Accent.TButton", background=c["accent"], foreground=c["accent_text"],
+                     bordercolor=c["accent"], lightcolor=c["accent"], darkcolor=c["accent2"],
+                     focuscolor=c["accent"], padding=(14, 7), relief=tk.FLAT, font=("{Segoe UI}", 9, "bold"))
+        s.map("Accent.TButton", background=[("pressed", c["accent2"]), ("active", c["accent"])])
 
-        style.configure("Danger.TButton", background=danger_dark, foreground=text,
-                         bordercolor=danger, lightcolor=danger_dark, darkcolor=danger_dark,
-                         focuscolor=danger, padding=(11, 7), relief=tk.FLAT)
-        style.map("Danger.TButton", background=[("pressed", danger_dark), ("active", danger)],
-                   foreground=[("disabled", muted), ("active", text)])
+        s.configure("Danger.TButton", background=c["danger2"], foreground="#ffffff",
+                     bordercolor=c["danger"], lightcolor=c["danger2"], darkcolor=c["danger2"],
+                     focuscolor=c["danger"], padding=(12, 6), relief=tk.FLAT)
+        s.map("Danger.TButton", background=[("pressed", c["danger2"]), ("active", c["danger"])])
 
-        field_options = {"fieldbackground": field, "background": field, "foreground": text,
-                         "bordercolor": border, "lightcolor": field, "darkcolor": field, "padding": 5}
+        s.configure("Icon.TButton", background=c["bg"], foreground=c["text"], bordercolor=c["border"],
+                     lightcolor=c["bg"], darkcolor=c["bg"], focuscolor=c["accent"], padding=(8, 5), relief=tk.FLAT)
+        s.map("Icon.TButton", background=[("pressed", c["field"]), ("active", c["surface2"])])
+
         for sn in ("TEntry", "TSpinbox", "TCombobox"):
-            style.configure(sn, **field_options)
-            style.map(sn, fieldbackground=[("readonly", field), ("focus", field)],
-                      background=[("readonly", field), ("focus", field)],
-                      foreground=[("readonly", text), ("disabled", muted)],
-                      bordercolor=[("focus", accent), ("active", accent)])
-        style.configure("TCombobox", arrowcolor=muted, arrowsize=14)
-        style.map("TCombobox", arrowcolor=[("active", accent), ("pressed", accent)])
+            s.configure(sn, fieldbackground=c["field"], background=c["field"], foreground=c["text"],
+                        bordercolor=c["border"], lightcolor=c["field"], darkcolor=c["field"], padding=6)
+            s.map(sn, fieldbackground=[("readonly", c["field"]), ("focus", c["field"])],
+                  foreground=[("readonly", c["text"]), ("disabled", c["muted"])],
+                  bordercolor=[("focus", c["accent"]), ("active", c["accent"])])
 
-        style.configure("TCheckbutton", background=bg, foreground=text, focuscolor=accent, padding=(0, 3))
-        style.map("TCheckbutton", foreground=[("disabled", muted), ("active", text)], background=[("active", bg)])
+        s.configure("TCheckbutton", background=c["bg"], foreground=c["text"], focuscolor=c["accent"], padding=(0, 3))
+        s.map("TCheckbutton", foreground=[("disabled", c["muted"])])
+        s.configure("Horizontal.TProgressbar", troughcolor=c["field"], background=c["accent"], bordercolor=c["border"], thickness=8)
+        s.configure("TSeparator", background=c["border"])
+        s.configure("TPanedwindow", background=c["bg"], sashwidth=3)
+        s.configure("TScrollbar", background=c["surface"], troughcolor=c["field"], bordercolor=c["bg"], arrowcolor=c["muted"], width=10)
+        s.map("TScrollbar", background=[("active", c["surface2"])], arrowcolor=[("active", c["text"])])
+        s.configure("Horizontal.TScale", background=c["bg"], troughcolor=c["field"], bordercolor=c["border"])
 
-        style.configure("Horizontal.TProgressbar", troughcolor=field, background=accent, bordercolor=border)
-        style.configure("TSeparator", background=border)
-        style.configure("TPanedwindow", background=bg)
-        style.configure("TScrollbar", background=surface, troughcolor=field, bordercolor=bg, arrowcolor=muted)
-        style.map("TScrollbar", background=[("active", surface_hover)], arrowcolor=[("active", text)])
-        style.configure("Horizontal.TScale", background=bg, troughcolor=field, bordercolor=border)
+        s.configure("Treeview", background=c["field"], foreground=c["text"], fieldbackground=c["field"],
+                     bordercolor=c["border"], rowheight=28)
+        s.configure("Treeview.Heading", background=c["surface"], foreground=c["text"], bordercolor=c["border"],
+                     font=("{Segoe UI}", 9, "bold"), padding=(8, 6))
+        s.map("Treeview", background=[("selected", c["selection"])], foreground=[("selected", c["text"])])
 
-        tree_opts = {"background": field, "foreground": text, "fieldbackground": field,
-                     "bordercolor": border, "rowheight": 27}
-        style.configure("Treeview", **tree_opts)
-        style.configure("Treeview.Heading", background=surface, foreground=text, bordercolor=border,
-                        font=UI_SECTION_FONT, padding=(6, 6))
-        style.map("Treeview", background=[("selected", accent_dark)], foreground=[("selected", text)])
+        s.configure("TNotebook", background=c["bg"], bordercolor=c["border"], tabmargins=(2, 2, 2, 0))
+        s.configure("TNotebook.Tab", background=c["surface"], foreground=c["text"], bordercolor=c["border"], padding=(14, 6))
+        s.map("TNotebook.Tab", background=[("selected", c["field"])], foreground=[("selected", c["accent"])])
 
-        style.configure("TNotebook", background=bg, bordercolor=border, tabmargins=(2, 2, 2, 0))
-        style.configure("TNotebook.Tab", background=surface, foreground=text, bordercolor=border,
-                        padding=(12, 5), font=UI_FONT)
-        style.map("TNotebook.Tab", background=[("selected", field), ("active", surface_hover)],
-                  foreground=[("selected", accent), ("active", text)])
-
-        self._active_bg = bg
-        self._active_fg = text
-        self._active_field = field
-        self._active_accent = accent
-        self._active_selection = selection
-        self._active_border = border
-        self._active_key_white = "#f5f6f7" if not self._is_dark_theme else UI_KEY_WHITE
-        self._active_key_white_active = "#54c8ff" if not self._is_dark_theme else UI_KEY_WHITE_ACTIVE
-        self._active_key_black = "#1c1e21" if not self._is_dark_theme else UI_KEY_BLACK
-        self._active_key_black_active = "#1877f2" if not self._is_dark_theme else UI_KEY_BLACK_ACTIVE
-        self._active_key_outline = "#ccd0d5" if not self._is_dark_theme else UI_KEY_OUTLINE
+        self._active_bg = c["bg"]
+        self._active_fg = c["text"]
+        self._active_field = c["field"]
+        self._active_accent = c["accent"]
+        self._active_selection = c["selection"]
+        self._active_border = c["border"]
+        self._active_kw = c["kw"]
+        self._active_kb = c["kb"]
+        self._active_kwa = c["kwa"]
+        self._active_kba = c["kba"]
+        self._active_ko = c["ko"]
+        self._active_surface = c["surface"]
+        self._active_muted = c["muted"]
 
     def toggle_theme(self) -> None:
         self._is_dark_theme = not getattr(self, "_is_dark_theme", True)
@@ -4605,34 +4624,24 @@ class PianoMacroApp(tk.Tk):
         self.status.set(f"Theme: {'Dark' if self._is_dark_theme else 'Light'}")
 
     def _style_text_widget(self, widget: tk.Text) -> None:
+        c = getattr(self, "_c", {"field": UI_FIELD, "text": UI_TEXT, "accent": UI_ACCENT,
+                                  "selection": UI_SELECTION, "border": UI_BORDER})
         widget.configure(
-            bg=getattr(self, "_active_field", UI_FIELD),
-            fg=getattr(self, "_active_fg", UI_TEXT),
-            insertbackground=getattr(self, "_active_accent", UI_ACCENT),
-            selectbackground=getattr(self, "_active_selection", UI_SELECTION),
-            selectforeground=getattr(self, "_active_fg", UI_TEXT),
-            relief=tk.FLAT,
-            borderwidth=0,
-            highlightthickness=1,
-            highlightbackground=getattr(self, "_active_border", UI_BORDER),
-            highlightcolor=getattr(self, "_active_accent", UI_ACCENT),
-            padx=10,
-            pady=10,
+            bg=c["field"], fg=c["text"], insertbackground=c["accent"],
+            selectbackground=c["selection"], selectforeground=c["text"],
+            relief=tk.FLAT, borderwidth=0, highlightthickness=1,
+            highlightbackground=c["border"], highlightcolor=c["accent"],
+            padx=10, pady=10,
         )
 
     def _style_listbox(self, widget: tk.Listbox) -> None:
+        c = getattr(self, "_c", {"field": UI_FIELD, "text": UI_TEXT, "accent": UI_ACCENT,
+                                  "border": UI_BORDER, "selection": UI_ACCENT_DARK})
         widget.configure(
-            bg=getattr(self, "_active_field", UI_FIELD),
-            fg=getattr(self, "_active_fg", UI_TEXT),
-            selectbackground=UI_ACCENT_DARK,
-            selectforeground=UI_TEXT,
-            activestyle="none",
-            relief=tk.FLAT,
-            borderwidth=0,
-            highlightthickness=1,
-            highlightbackground=getattr(self, "_active_border", UI_BORDER),
-            highlightcolor=getattr(self, "_active_accent", UI_ACCENT),
-            font=("Segoe UI", 10),
+            bg=c["field"], fg=c["text"], selectbackground=c["selection"],
+            selectforeground=c["text"], activestyle="none", relief=tk.FLAT,
+            borderwidth=0, highlightthickness=1, highlightbackground=c["border"],
+            highlightcolor=c["accent"], font=("Segoe UI", 10),
         )
 
     @staticmethod
@@ -4685,72 +4694,68 @@ class PianoMacroApp(tk.Tk):
             self._bind_mousewheel_to_canvas(child, canvas)
 
     def _build_ui(self) -> None:
-        root = ttk.Frame(self, padding=16)
+        c = getattr(self, "_c", {"bg": UI_BG, "surface": UI_SURFACE, "header_bg": "#0d1117",
+                                  "header_border": "#21262d", "text": UI_TEXT, "accent": UI_ACCENT,
+                                  "muted": UI_MUTED, "danger": UI_DANGER, "field": UI_FIELD,
+                                  "border": UI_BORDER})
+        root = ttk.Frame(self)
         root.pack(fill=tk.BOTH, expand=True)
         root.columnconfigure(0, weight=1)
         root.rowconfigure(2, weight=1)
 
-        title_row = ttk.Frame(root)
-        title_row.grid(row=0, column=0, sticky="ew")
-        title_row.columnconfigure(0, weight=1)
-        ttk.Label(title_row, text=APP_TITLE, style="Title.TLabel").grid(row=0, column=0, sticky="w")
-        ttk.Label(title_row, textvariable=self.status, style="Status.TLabel").grid(
-            row=1, column=0, sticky="w", pady=(3, 0)
-        )
+        # ── Header bar ──
+        header = tk.Canvas(root, height=56, bg=c["header_bg"], highlightthickness=0)
+        header.grid(row=0, column=0, sticky="ew")
+        header.create_text(18, 28, text="\u266b", fill=c["accent"], font=("Segoe UI", 22), anchor="w")
+        header.create_text(52, 29, text=APP_TITLE, fill="#ffffff", font=("{Segoe UI}", 15, "bold"), anchor="w")
+        sep = tk.Frame(root, height=1, bg=c["header_border"])
+        sep.grid(row=0, column=0, sticky="ew")
+        sep.lift()
 
-        control_bar = ttk.Frame(root)
-        control_bar.grid(row=1, column=0, sticky="ew", pady=(12, 8))
-        for column in range(14):
-            control_bar.columnconfigure(column, weight=0)
+        # ── Control bar ──
+        control_bar = ttk.Frame(root, padding=(12, 10, 12, 6))
+        control_bar.grid(row=1, column=0, sticky="ew")
+        for i in range(14):
+            control_bar.columnconfigure(i, weight=0)
         control_bar.columnconfigure(13, weight=1)
 
-        play_btn = ttk.Button(control_bar, text="Play", command=self.start_playback, style="Accent.TButton")
-        play_btn.grid(row=0, column=0, padx=(0, 6))
-        self._add_tooltip(play_btn, "Send keystrokes to Roblox (F6)")
+        icons = {"Play": "\u25b6", "Preview": "\u25b7", "Pause": "\u23f8", "Stop": "\u23f9",
+                 "Load MIDI": "\ud83d\udcc2", "Audio": "\ud83c\udfb5", "Search": "\ud83d\udd0d",
+                 "Record": "\u23fa"}
+        btns = [
+            ("Play", self.start_playback, "Accent.TButton", "Send keystrokes to Roblox (F6)"),
+            ("Preview", self.start_preview_playback, "TButton", "Keyboard highlight only, no keystrokes"),
+            ("Pause", self.toggle_pause, "TButton", "Pause/resume (F7)"),
+            ("Stop", self.stop_playback, "Danger.TButton", "Stop immediately (F8)"),
+            ("Load MIDI", self.load_midi, "TButton", "Import .mid file (Ctrl+O)"),
+            ("Audio", self.open_audio_to_midi_tool, "TButton", "Convert audio to MIDI with AI"),
+            ("Search", self.open_online_midi_search_tool, "TButton", "Search Online Sequencer"),
+            ("Record", self.toggle_recording, "TButton", "Record keystrokes as score"),
+        ]
+        for idx, (label, cmd, style, tip) in enumerate(btns):
+            icon = icons.get(label, "")
+            btn = ttk.Button(control_bar, text=f"{icon}  {label}", command=cmd, style=style)
+            btn.grid(row=0, column=idx, padx=(0, 4))
+            self._add_tooltip(btn, tip)
+            if label == "Load MIDI":
+                btn.bind("<Button-3>", self._show_recent_midi_menu)
+            if label == "Record":
+                self.record_btn = btn
 
-        preview_btn = ttk.Button(control_bar, text="Preview", command=self.start_preview_playback)
-        preview_btn.grid(row=0, column=1, padx=6)
-        self._add_tooltip(preview_btn, "Play with keyboard highlight only, no keystrokes")
+        nfo = ttk.Label(control_bar, textvariable=self.loaded_midi_name, style="Muted.TLabel")
+        nfo.grid(row=0, column=8, columnspan=6, sticky="e")
 
-        pause_btn = ttk.Button(control_bar, text="Pause", command=self.toggle_pause)
-        pause_btn.grid(row=0, column=2, padx=6)
-        self._add_tooltip(pause_btn, "Pause/resume playback (F7)")
-
-        stop_btn = ttk.Button(control_bar, text="Stop", command=self.stop_playback, style="Danger.TButton")
-        stop_btn.grid(row=0, column=3, padx=6)
-        self._add_tooltip(stop_btn, "Stop playback immediately (F8)")
-
-        midi_btn = ttk.Button(control_bar, text="Load MIDI", command=self.load_midi)
-        midi_btn.grid(row=0, column=4, padx=6)
-        midi_btn.bind("<Button-3>", self._show_recent_midi_menu)
-        self._add_tooltip(midi_btn, "Import a .mid file (Ctrl+O). Right-click for recent.")
-
-        audio_btn = ttk.Button(control_bar, text="Audio to MIDI", command=self.open_audio_to_midi_tool)
-        audio_btn.grid(row=0, column=5, padx=6)
-        self._add_tooltip(audio_btn, "Convert WAV/MP3/FLAC to MIDI with AI")
-
-        search_btn = ttk.Button(control_bar, text="Online Search", command=self.open_online_midi_search_tool)
-        search_btn.grid(row=0, column=6, padx=6)
-        self._add_tooltip(search_btn, "Search & download from Online Sequencer")
-
-        self.record_btn = ttk.Button(control_bar, text="Record", command=self.toggle_recording)
-        self.record_btn.grid(row=0, column=7, padx=6)
-        self._add_tooltip(self.record_btn, "Start/stop recording keystrokes as a score")
-
-        ttk.Label(control_bar, textvariable=self.loaded_midi_name, style="Muted.TLabel").grid(
-            row=0, column=8, columnspan=6, sticky="e"
-        )
-
+        # ── Main paned area ──
         paned = ttk.Panedwindow(root, orient=tk.HORIZONTAL)
         paned.grid(row=2, column=0, sticky="nsew")
 
-        library_frame = ttk.Frame(paned, padding=(0, 8, 14, 0))
+        library_frame = ttk.Frame(paned, padding=(12, 8, 6, 8))
         library_frame.columnconfigure(0, weight=1)
         library_frame.rowconfigure(1, weight=1)
         self._build_library_panel(library_frame)
         paned.add(library_frame, weight=1)
 
-        editor_frame = ttk.Frame(paned, padding=(0, 8, 14, 0))
+        editor_frame = ttk.Frame(paned, padding=(6, 8, 6, 8))
         editor_frame.columnconfigure(0, weight=1)
         editor_frame.rowconfigure(2, weight=1)
         paned.add(editor_frame, weight=3)
@@ -4794,6 +4799,11 @@ class PianoMacroApp(tk.Tk):
         self.score_text = tk.Text(editor_frame, wrap=tk.WORD, undo=True, font=("Consolas", 11))
         self.score_text.grid(row=2, column=0, sticky="nsew", pady=(4, 0))
         self._style_text_widget(self.score_text)
+        self._line_numbers = tk.Canvas(editor_frame, width=44, bg=c["field"], highlightthickness=0)
+        self._line_numbers.place(in_=self.score_text, relx=0, rely=0, relheight=1, x=0, y=0, anchor="nw")
+        self.score_text.bind("<KeyRelease>", self._update_line_numbers)
+        self.score_text.bind("<MouseWheel>", self._update_line_numbers)
+        self.score_text.bind("<<Modified>>", lambda e: (self._on_text_modified(e), self._update_line_numbers()))
         self.score_text.insert(
             "1.0",
             "C4 D4 E4 F4 G4 A4 B4 C5\n"
@@ -4806,12 +4816,8 @@ class PianoMacroApp(tk.Tk):
         keyboard_frame.columnconfigure(0, weight=1)
         ttk.Label(keyboard_frame, text="Preview keyboard", style="Section.TLabel").grid(row=0, column=0, sticky="w")
         self.keyboard_canvas = tk.Canvas(
-            keyboard_frame,
-            height=132,
-            bg=getattr(self, "_active_field", UI_FIELD),
-            highlightthickness=1,
-            highlightbackground=getattr(self, "_active_border", UI_BORDER),
-            highlightcolor=getattr(self, "_active_accent", UI_ACCENT),
+            keyboard_frame, height=132, bg=c["field"],
+            highlightthickness=1, highlightbackground=c["border"], highlightcolor=c["accent"],
         )
         self.keyboard_canvas.grid(row=1, column=0, sticky="ew", pady=(6, 0))
         self.keyboard_canvas.bind("<Configure>", lambda _event: self.draw_keyboard_preview())
@@ -4832,7 +4838,7 @@ class PianoMacroApp(tk.Tk):
         side_container = ttk.Frame(paned, padding=(14, 8, 0, 0))
         side_container.columnconfigure(0, weight=1)
         side_container.rowconfigure(0, weight=1)
-        side_canvas = tk.Canvas(side_container, bg=getattr(self, "_active_bg", UI_BG), highlightthickness=0, borderwidth=0)
+        side_canvas = tk.Canvas(side_container, bg=c["bg"], highlightthickness=0, borderwidth=0)
         side_scrollbar = ttk.Scrollbar(side_container, orient=tk.VERTICAL, command=side_canvas.yview)
         side_canvas.configure(yscrollcommand=side_scrollbar.set)
         side_canvas.grid(row=0, column=0, sticky="nsew")
@@ -5056,7 +5062,14 @@ class PianoMacroApp(tk.Tk):
         )
         row += 1
 
-        ttk.Progressbar(root, variable=self.progress, maximum=100).grid(row=3, column=0, sticky="ew", pady=(10, 0))
+        ttk.Progressbar(root, variable=self.progress, maximum=100).grid(row=3, column=0, sticky="ew", pady=(8, 0), padx=12)
+
+        status_bar = ttk.Frame(root)
+        status_bar.grid(row=4, column=0, sticky="ew", padx=12, pady=(4, 6))
+        status_bar.columnconfigure(0, weight=1)
+        ttk.Label(status_bar, textvariable=self.status, style="Status.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(status_bar, textvariable=self.queue_status, style="Muted.TLabel").grid(row=0, column=1, sticky="e", padx=(12, 0))
+
         self._bind_mousewheel_to_canvas(side_container, side_canvas)
 
     def _build_library_panel(self, parent: ttk.Frame) -> None:
@@ -5175,17 +5188,21 @@ class PianoMacroApp(tk.Tk):
         white_width = width / len(WHITE_MIDI_NOTES)
         white_positions: dict[int, int] = {midi_note: index for index, midi_note in enumerate(WHITE_MIDI_NOTES)}
 
+        c = getattr(self, "_c", {"kw": UI_KEY_WHITE, "kwa": UI_KEY_WHITE_ACTIVE,
+                                  "kb": UI_KEY_BLACK, "kba": UI_KEY_BLACK_ACTIVE,
+                                  "ko": UI_KEY_OUTLINE, "muted": UI_MUTED, "field": UI_FIELD,
+                                  "accent": UI_ACCENT})
         for index, midi_note in enumerate(WHITE_MIDI_NOTES):
             x0 = index * white_width
             x1 = (index + 1) * white_width
             in_scale = not self.scale_highlighted or midi_note in self.scale_highlighted
             if midi_note in self.preview_active_notes:
-                fill = getattr(self, "_active_key_white_active", UI_KEY_WHITE_ACTIVE)
+                fill = c["kwa"]
             elif not in_scale:
-                fill = "#1a1f26"
+                fill = "#1a1f26" if getattr(self, "_is_dark_theme", True) else "#d0d5d9"
             else:
-                fill = getattr(self, "_active_key_white", UI_KEY_WHITE)
-            rect = canvas.create_rectangle(x0, 0, x1, white_height, fill=fill, outline=getattr(self, "_active_key_outline", UI_KEY_OUTLINE))
+                fill = c["kw"]
+            rect = canvas.create_rectangle(x0, 0, x1, white_height, fill=fill, outline=c["ko"])
             binding = KEY_MAP[midi_note]
             note_text = canvas.create_text(
                 (x0 + x1) / 2,
@@ -5217,10 +5234,10 @@ class PianoMacroApp(tk.Tk):
             center = (index + 1) * white_width
             x0 = center - black_width / 2
             x1 = center + black_width / 2
-            fill = getattr(self, "_active_key_black_active", UI_KEY_BLACK_ACTIVE) if midi_note in self.preview_active_notes else getattr(self, "_active_key_black", UI_KEY_BLACK)
+            fill = c["kba"] if midi_note in self.preview_active_notes else c["kb"]
             in_scale = not self.scale_highlighted or midi_note in self.scale_highlighted
             if not in_scale and midi_note not in self.preview_active_notes:
-                fill = "#0a0d12"
+                fill = "#0a0d12" if getattr(self, "_is_dark_theme", True) else "#b0b5ba"
             rect = canvas.create_rectangle(x0, 0, x1, black_height, fill=fill, outline="#020409")
             binding = KEY_MAP[midi_note]
             key_text = canvas.create_text(
@@ -5256,27 +5273,19 @@ class PianoMacroApp(tk.Tk):
     def _apply_keyboard_highlights(self) -> None:
         if not hasattr(self, "keyboard_canvas"):
             return
-        kw = getattr(self, "_active_key_white", UI_KEY_WHITE)
-        kwa = getattr(self, "_active_key_white_active", UI_KEY_WHITE_ACTIVE)
-        kb = getattr(self, "_active_key_black", UI_KEY_BLACK)
-        kba = getattr(self, "_active_key_black_active", UI_KEY_BLACK_ACTIVE)
+        c = getattr(self, "_c", {"kw": UI_KEY_WHITE, "kwa": UI_KEY_WHITE_ACTIVE,
+                                  "kb": UI_KEY_BLACK, "kba": UI_KEY_BLACK_ACTIVE})
         for midi_note, rect in self.preview_rects.items():
             active = midi_note in self.preview_active_notes
             is_black = self.preview_is_black.get(midi_note, False)
             vel = self.preview_note_velocities.get(midi_note, 100) / 127.0
             if active:
                 if is_black:
-                    r = min(255, int(40 + vel * 215))
-                    g = min(255, int(189 + vel * 66))
-                    b = min(255, int(253 - vel * 60))
-                    fill = f"#{r:02x}{g:02x}{b:02x}"
+                    fill = f"#{min(255,int(40+vel*215)):02x}{min(255,int(166+vel*89)):02x}{min(255,int(255-vel*20)):02x}"
                 else:
-                    r = min(255, int(135 + vel * 120))
-                    g = min(255, int(220 - vel * 40))
-                    b = min(255, int(255 - vel * 30))
-                    fill = f"#{r:02x}{g:02x}{b:02x}"
+                    fill = f"#{min(255,int(88+vel*167)):02x}{min(255,int(166+vel*89)):02x}{min(255,int(255-vel*10)):02x}"
             else:
-                fill = kb if is_black else kw
+                fill = c["kb"] if is_black else c["kw"]
             self.keyboard_canvas.itemconfigure(rect, fill=fill)
 
     def highlight_midi_notes(self, notes: set[int], add: bool = False) -> None:
