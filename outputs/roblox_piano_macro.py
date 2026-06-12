@@ -4108,6 +4108,9 @@ class PianoMacroApp(tk.Tk):
         self.preview_active_notes: set[int] = set()
         self.preview_note_velocities: dict[int, int] = {}
         self.metronome_active = False
+        self.scale_root = tk.StringVar(value="None")
+        self.scale_mode_var = tk.StringVar(value="major")
+        self.scale_highlighted: set[int] = set()
         self.listener = None
         self.pressed_hotkey_parts: set[str] = set()
         self.hotkey_capture_target: tuple[str, tk.StringVar] | None = None
@@ -4342,6 +4345,56 @@ class PianoMacroApp(tk.Tk):
             outline=getattr(self, "_active_accent", UI_ACCENT),
             tags="metro",
         )
+
+    def _highlight_scale(self) -> None:
+        root_name = self.scale_root.get()
+        if root_name == "None":
+            self.scale_highlighted.clear()
+            self.draw_keyboard_preview()
+            return
+        try:
+            root_midi = note_name_to_midi(root_name) % 12
+        except Exception:
+            return
+        mode = self.scale_mode_var.get()
+        interval_map = {
+            "major": [0, 2, 4, 5, 7, 9, 11],
+            "minor": [0, 2, 3, 5, 7, 8, 10],
+            "harmonic minor": [0, 2, 3, 5, 7, 8, 11],
+            "melodic minor": [0, 2, 3, 5, 7, 9, 11],
+            "pentatonic major": [0, 2, 4, 7, 9],
+            "pentatonic minor": [0, 3, 5, 7, 10],
+            "blues": [0, 3, 5, 6, 7, 10],
+            "chromatic": list(range(12)),
+        }
+        intervals = interval_map.get(mode, [0, 2, 4, 5, 7, 9, 11])
+        pitches = {(root_midi + i) % 12 for i in intervals}
+        self.scale_highlighted = {midi for midi in KEY_MAP if midi % 12 in pitches}
+        self.draw_keyboard_preview()
+
+    @staticmethod
+    def _detect_chord_name(midi_notes: list[int]) -> str:
+        if len(midi_notes) < 2:
+            return ""
+        pcs = sorted(set(n % 12 for n in midi_notes))
+        if len(pcs) < 2:
+            return ""
+        intervals_set = {(p - pcs[0]) % 12 for p in pcs}
+        templates = {
+            "maj": {0, 4, 7}, "m": {0, 3, 7}, "dim": {0, 3, 6}, "aug": {0, 4, 8},
+            "sus2": {0, 2, 7}, "sus4": {0, 5, 7},
+            "maj7": {0, 4, 7, 11}, "m7": {0, 3, 7, 10}, "7": {0, 4, 7, 10},
+            "dim7": {0, 3, 6, 9}, "m7b5": {0, 3, 6, 10}, "m(maj7)": {0, 3, 7, 11},
+            "maj9": {0, 4, 7, 11, 2}, "m9": {0, 3, 7, 10, 2}, "9": {0, 4, 7, 10, 2},
+            "6": {0, 4, 7, 9}, "m6": {0, 3, 7, 9},
+        }
+        best, best_score = "", 0
+        for name, tpl in templates.items():
+            if tpl.issubset(intervals_set) and len(tpl) > best_score:
+                best_score, best = len(tpl), name
+        if best and pcs:
+            return f"{['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'][pcs[0]]}{best}"
+        return ""
 
     def _auto_save_tick(self) -> None:
         if self._is_dirty and getattr(self, "current_song_id", None):
@@ -4723,6 +4776,7 @@ class PianoMacroApp(tk.Tk):
         ttk.Label(editor_actions, text="Song text", style="Section.TLabel").pack(side=tk.LEFT)
         ttk.Button(editor_actions, text="Analyze", command=self.analyze_current_source).pack(side=tk.RIGHT, padx=(6, 0))
         ttk.Button(editor_actions, text="Timeline", command=self.open_timeline_editor).pack(side=tk.RIGHT, padx=(6, 0))
+        ttk.Button(editor_actions, text="Piano Roll", command=self.open_piano_roll_editor).pack(side=tk.RIGHT, padx=(6, 0))
         ttk.Button(editor_actions, text="Auto Cleanup MIDI", command=self.cleanup_loaded_midi_playability).pack(
             side=tk.RIGHT, padx=(6, 0)
         )
@@ -4761,6 +4815,19 @@ class PianoMacroApp(tk.Tk):
         )
         self.keyboard_canvas.grid(row=1, column=0, sticky="ew", pady=(6, 0))
         self.keyboard_canvas.bind("<Configure>", lambda _event: self.draw_keyboard_preview())
+
+        scale_row = ttk.Frame(editor_frame)
+        scale_row.grid(row=4, column=0, sticky="ew", pady=(6, 0))
+        ttk.Label(scale_row, text="Scale:").pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Combobox(scale_row, textvariable=self.scale_root, width=8, state="readonly",
+                     values=["None"] + [midi_to_note_name(n) for n in range(note_name_to_midi("C2"), note_name_to_midi("C5") + 1) if "#" not in midi_to_note_name(n)]
+                     ).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Combobox(scale_row, textvariable=self.scale_mode_var, width=8, state="readonly",
+                     values=["major", "minor", "harmonic minor", "melodic minor", "pentatonic major", "pentatonic minor", "blues", "chromatic"]
+                     ).pack(side=tk.LEFT)
+        ttk.Button(scale_row, text="Highlight", command=self._highlight_scale).pack(side=tk.LEFT, padx=(6, 0))
+        self.scale_root.trace_add("write", lambda *_: self._highlight_scale())
+        self.scale_mode_var.trace_add("write", lambda *_: self._highlight_scale())
 
         side_container = ttk.Frame(paned, padding=(14, 8, 0, 0))
         side_container.columnconfigure(0, weight=1)
@@ -5111,7 +5178,13 @@ class PianoMacroApp(tk.Tk):
         for index, midi_note in enumerate(WHITE_MIDI_NOTES):
             x0 = index * white_width
             x1 = (index + 1) * white_width
-            fill = getattr(self, "_active_key_white_active", UI_KEY_WHITE_ACTIVE) if midi_note in self.preview_active_notes else getattr(self, "_active_key_white", UI_KEY_WHITE)
+            in_scale = not self.scale_highlighted or midi_note in self.scale_highlighted
+            if midi_note in self.preview_active_notes:
+                fill = getattr(self, "_active_key_white_active", UI_KEY_WHITE_ACTIVE)
+            elif not in_scale:
+                fill = "#1a1f26"
+            else:
+                fill = getattr(self, "_active_key_white", UI_KEY_WHITE)
             rect = canvas.create_rectangle(x0, 0, x1, white_height, fill=fill, outline=getattr(self, "_active_key_outline", UI_KEY_OUTLINE))
             binding = KEY_MAP[midi_note]
             note_text = canvas.create_text(
@@ -5145,6 +5218,9 @@ class PianoMacroApp(tk.Tk):
             x0 = center - black_width / 2
             x1 = center + black_width / 2
             fill = getattr(self, "_active_key_black_active", UI_KEY_BLACK_ACTIVE) if midi_note in self.preview_active_notes else getattr(self, "_active_key_black", UI_KEY_BLACK)
+            in_scale = not self.scale_highlighted or midi_note in self.scale_highlighted
+            if not in_scale and midi_note not in self.preview_active_notes:
+                fill = "#0a0d12"
             rect = canvas.create_rectangle(x0, 0, x1, black_height, fill=fill, outline="#020409")
             binding = KEY_MAP[midi_note]
             key_text = canvas.create_text(
@@ -6586,6 +6662,218 @@ class PianoMacroApp(tk.Tk):
         end_var.trace_add("write", lambda *_: draw_timeline())
         window.after(80, draw_timeline)
 
+    def open_piano_roll_editor(self) -> None:
+        try:
+            settings = self.read_settings()
+            actions, source_name = self._base_actions_for_current_source(settings)
+            notes = scheduled_actions_to_audio_notes(actions)
+        except Exception as exc:
+            messagebox.showerror("Piano Roll", str(exc))
+            return
+        if not notes:
+            messagebox.showinfo("Piano Roll", "No notes to display. Load a MIDI or enter a text score first.")
+            return
+
+        window = tk.Toplevel(self)
+        window.title("Piano Roll Editor")
+        window.geometry("1020x620")
+        window.minsize(800, 440)
+        window.configure(bg=getattr(self, "_active_bg", UI_BG))
+        window.transient(self)
+
+        bpm = max(1.0, float(self.bpm.get()))
+        beat_seconds = 60.0 / bpm
+        duration = max(note.end for note in notes)
+        total_beats = duration / beat_seconds
+        low_midi = min(note.midi for note in notes)
+        high_midi = max(note.midi for note in notes)
+        low_midi = max(24, low_midi - 4)
+        high_midi = min(108, high_midi + 4)
+        note_range = high_midi - low_midi + 1
+
+        px_per_beat = 42
+        px_per_note = 14
+        left_margin = 52
+        top_margin = 32
+        canvas_width = max(600, left_margin + int(total_beats * px_per_beat) + 40)
+        canvas_height = top_margin + note_range * px_per_note + 20
+
+        root = ttk.Frame(window, padding=8)
+        root.pack(fill=tk.BOTH, expand=True)
+
+        toolbar = ttk.Frame(root)
+        toolbar.pack(fill=tk.X, pady=(0, 6))
+        ttk.Label(toolbar, text=f"Piano Roll - {source_name}  |  {len(notes)} notes  |  {bpm:.0f} BPM  |  {midi_to_note_name(low_midi)}-{midi_to_note_name(high_midi)}",
+                  style="Section.TLabel").pack(side=tk.LEFT)
+        ttk.Button(toolbar, text="Apply", command=lambda: apply_changes(), style="Accent.TButton").pack(side=tk.RIGHT, padx=(4, 0))
+        ttk.Button(toolbar, text="Preview", command=lambda: preview_roll()).pack(side=tk.RIGHT, padx=4)
+        ttk.Button(toolbar, text="Add Note", command=lambda: add_note_at_cursor()).pack(side=tk.RIGHT, padx=4)
+        ttk.Button(toolbar, text="Delete Selected", command=lambda: delete_selected()).pack(side=tk.RIGHT, padx=4)
+
+        canvas_frame = ttk.Frame(root)
+        canvas_frame.pack(fill=tk.BOTH, expand=True)
+        h_scroll = ttk.Scrollbar(canvas_frame, orient=tk.HORIZONTAL)
+        v_scroll = ttk.Scrollbar(canvas_frame, orient=tk.VERTICAL)
+        canvas = tk.Canvas(canvas_frame, bg=getattr(self, "_active_field", UI_FIELD),
+                           highlightthickness=1, highlightbackground=getattr(self, "_active_border", UI_BORDER),
+                           scrollregion=(0, 0, canvas_width, canvas_height))
+        canvas.grid(row=0, column=0, sticky="nsew")
+        h_scroll.grid(row=1, column=0, sticky="ew")
+        v_scroll.grid(row=0, column=1, sticky="ns")
+        canvas.configure(xscrollcommand=h_scroll.set, yscrollcommand=v_scroll.set)
+        h_scroll.configure(command=canvas.xview)
+        v_scroll.configure(command=canvas.yview)
+        canvas_frame.rowconfigure(0, weight=1)
+        canvas_frame.columnconfigure(0, weight=1)
+
+        editable_notes: list[dict[str, object]] = [
+            {"start": n.start, "end": n.end, "midi": n.midi, "velocity": n.velocity}
+            for n in notes
+        ]
+        selected_index: int | None = [None]
+        drag_data: dict[str, object] = {}
+        cursor_beat = [0.0]
+
+        def note_color(midi_note: int) -> str:
+            name = midi_to_note_name(midi_note)
+            if "#" in name:
+                return "#1a1a2e"
+            return "#16213e"
+
+        def note_color_selected() -> str:
+            return "#2980b9"
+
+        def draw_grid() -> None:
+            canvas.delete("grid")
+            for b in range(0, int(total_beats) + 2):
+                x = left_margin + b * px_per_beat
+                is_bar = b % 4 == 0
+                color = "#3a4455" if is_bar else "#252d38"
+                width = 2 if is_bar else 1
+                canvas.create_line(x, 0, x, canvas_height, fill=color, width=width, tags="grid")
+                if b % 2 == 0:
+                    canvas.create_text(x, 14, text=str(b), fill=getattr(self, "_active_muted", UI_MUTED) if hasattr(self, "_active_muted") else UI_MUTED,
+                                      font=("Segoe UI", 7), tags="grid")
+            for midi_note in range(low_midi, high_midi + 1):
+                y = top_margin + (high_midi - midi_note) * px_per_note
+                name = midi_to_note_name(midi_note)
+                is_black = "#" in name
+                color = "#1e2530" if is_black else "#252d38"
+                canvas.create_rectangle(left_margin, y, canvas_width, y + px_per_note, fill=color, outline="", tags="grid")
+                if not is_black:
+                    canvas.create_text(left_margin - 6, y + px_per_note // 2, text=name,
+                                      fill=getattr(self, "_active_muted", UI_MUTED) if hasattr(self, "_active_muted") else UI_MUTED,
+                                      font=("Segoe UI", 8), anchor="e", tags="grid")
+
+        def draw_notes() -> None:
+            canvas.delete("note")
+            for idx, note in enumerate(editable_notes):
+                x1 = left_margin + float(note["start"]) / beat_seconds * px_per_beat
+                x2 = left_margin + float(note["end"]) / beat_seconds * px_per_beat
+                y1 = top_margin + (high_midi - int(note["midi"])) * px_per_note + 1
+                y2 = y1 + px_per_note - 2
+                color = note_color_selected() if idx == selected_index[0] else note_color(int(note["midi"]))
+                r = canvas.create_rectangle(x1, y1, max(x1 + 1, x2), y2, fill=color,
+                                            outline="#4a90d9" if idx == selected_index[0] else "#3a4a5a",
+                                            width=2 if idx == selected_index[0] else 1, tags="note")
+                canvas.tag_bind(r, "<Button-1>", lambda e, i=idx: select_note(i, e))
+                canvas.tag_bind(r, "<B1-Motion>", lambda e, i=idx: drag_note(i, e))
+                canvas.tag_bind(r, "<Button-3>", lambda e, i=idx: delete_note(i))
+
+        def select_note(index: int, event: tk.Event) -> None:
+            selected_index[0] = index
+            drag_data["start_x"] = event.x
+            drag_data["start_y"] = event.y
+            drag_data["note_start"] = float(editable_notes[index]["start"])
+            drag_data["note_end"] = float(editable_notes[index]["end"])
+            drag_data["note_midi"] = int(editable_notes[index]["midi"])
+            drag_data["resizing"] = abs(event.x - (left_margin + drag_data["note_end"] / beat_seconds * px_per_beat)) < 8
+            draw_notes()
+
+        def drag_note(index: int, event: tk.Event) -> None:
+            if selected_index[0] != index:
+                return
+            dx = (event.x - drag_data.get("start_x", 0)) / px_per_beat * beat_seconds
+            dy = -(event.y - drag_data.get("start_y", 0)) / px_per_note
+            if drag_data.get("resizing"):
+                new_end = max(float(drag_data["note_start"]) + 0.02, float(drag_data["note_end"]) + dx)
+                editable_notes[index]["end"] = new_end
+            else:
+                new_start = max(0.0, float(drag_data["note_start"]) + dx)
+                duration = float(drag_data["note_end"]) - float(drag_data["note_start"])
+                new_midi = max(0, min(127, int(float(drag_data["note_midi"]) + round(dy))))
+                editable_notes[index]["start"] = new_start
+                editable_notes[index]["end"] = new_start + duration
+                editable_notes[index]["midi"] = new_midi
+            draw_notes()
+
+        def delete_note(index: int) -> None:
+            editable_notes.pop(index)
+            selected_index[0] = None
+            draw_notes()
+
+        def delete_selected() -> None:
+            if selected_index[0] is not None:
+                delete_note(selected_index[0])
+
+        def add_note_at_cursor() -> None:
+            midi = low_midi + note_range // 2
+            start = cursor_beat[0] * beat_seconds
+            editable_notes.append({
+                "start": start,
+                "end": start + beat_seconds * 0.5,
+                "midi": midi,
+                "velocity": 84,
+            })
+            selected_index[0] = len(editable_notes) - 1
+            draw_notes()
+
+        def canvas_click(event: tk.Event) -> None:
+            if event.x < left_margin:
+                return
+            beat = (canvas.canvasx(event.x) - left_margin) / px_per_beat
+            midi = high_midi - int((canvas.canvasy(event.y) - top_margin) / px_per_note)
+            if low_midi <= midi <= high_midi:
+                start = max(0.0, beat * beat_seconds)
+                editable_notes.append({
+                    "start": start,
+                    "end": start + beat_seconds * 0.5,
+                    "midi": midi,
+                    "velocity": 84,
+                })
+                selected_index[0] = len(editable_notes) - 1
+                draw_notes()
+
+        def apply_changes() -> None:
+            if not editable_notes:
+                return
+            actions: list[ScheduledAction] = []
+            for note in editable_notes:
+                p = Playable("midi", int(note["midi"]))
+                actions.append(ScheduledAction(float(note["start"]), "down", (p,)))
+                actions.append(ScheduledAction(float(note["end"]), "up", (p,)))
+            self.loaded_midi_actions = coalesce_scheduled_actions(actions)
+            self.source_mode.set("midi")
+            self.loaded_midi_name.set(f"{source_name} (edited)")
+            self.status.set(f"Applied piano roll: {len(editable_notes)} notes.")
+            self.analyze_current_source(show_popup=False)
+            window.destroy()
+
+        def preview_roll() -> None:
+            apply_changes()
+            self.start_preview_playback()
+
+        canvas.bind("<Button-1>", lambda e: select_note(-1, e) if e.x < left_margin else canvas_click(e))
+        canvas.bind("<Button-3>", lambda e: delete_selected() if selected_index[0] is not None else None)
+        canvas.bind("<MouseWheel>", lambda e: canvas.yview_scroll(-1 if e.delta > 0 else 1, "units"))
+        canvas.bind("<Shift-MouseWheel>", lambda e: canvas.xview_scroll(-1 if e.delta > 0 else 1, "units"))
+        for i in range(10):
+            canvas.bind(f"<Key-{i}>", lambda e: None)
+
+        draw_grid()
+        draw_notes()
+        canvas.focus_set()
+
     def open_online_midi_search_tool(self) -> None:
         window = tk.Toplevel(self)
         window.title("Online MIDI Search")
@@ -7805,6 +8093,21 @@ class PianoMacroApp(tk.Tk):
             ]
             key_conflicts = max_visual_piano_key_conflicts(conflict_notes)
 
+            chords: list[str] = []
+            if raw_notes:
+                chord_buckets: dict[int, list[int]] = {}
+                anotes = scheduled_actions_to_audio_notes(actions)
+                for note in anotes:
+                    bucket = int(note.start * settings.bpm / 60.0 / 0.5)
+                    chord_buckets.setdefault(bucket, []).append(note.midi + settings.transpose)
+                for bucket_notes in chord_buckets.values():
+                    if len(bucket_notes) >= 2:
+                        ch = self._detect_chord_name(bucket_notes)
+                        if ch and ch not in chords:
+                            chords.append(ch)
+                        if len(chords) >= 6:
+                            break
+
             if raw_notes:
                 low_note = midi_to_note_name(min(shifted_notes))
                 high_note = midi_to_note_name(max(shifted_notes))
@@ -7812,6 +8115,7 @@ class PianoMacroApp(tk.Tk):
             else:
                 source_range = "raw keys only"
 
+            chord_text = f"\nChords: {', '.join(chords)}" if chords else ""
             summary = (
                 f"{source_name}\n"
                 f"Length: {duration:.1f}s | Notes: {len(raw_notes)}"
@@ -7819,6 +8123,7 @@ class PianoMacroApp(tk.Tk):
                 f"Range after transpose: {source_range}\n"
                 f"Out of range: {out_count} | Max held: {self._max_simultaneous_notes(actions)} | Key conflicts: {key_conflicts}\n"
                 f"Suggested transpose: {suggested:+d}"
+                f"{chord_text}"
             )
             self.analysis_summary.set(summary)
             if show_popup:
