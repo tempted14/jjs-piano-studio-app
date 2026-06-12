@@ -6653,6 +6653,7 @@ class PianoMacroApp(tk.Tk):
                 entry["last_played"] = now_stamp()
                 self._update_recent_label()
         self._start_playback(preview_override=None)
+        self._start_playing_indicator()
 
     def _start_playback(self, preview_override: bool | None = None) -> None:
         if self.play_thread and self.play_thread.is_alive():
@@ -6697,8 +6698,36 @@ class PianoMacroApp(tk.Tk):
         self.pause_event.clear()
         self.sender.release_all()
         self.clear_keyboard_highlights()
+        self._stop_playing_indicator()
         self.status.set("Stopped.")
         self.progress.set(0.0)
+
+    def _start_playing_indicator(self) -> None:
+        if hasattr(self, "_indicator_after") and self._indicator_after:
+            return
+        self._indicator_phase = 0
+        self._indicator_after = self.after(0, self._tick_playing_indicator)
+
+    def _stop_playing_indicator(self) -> None:
+        if hasattr(self, "_indicator_after") and self._indicator_after:
+            self.after_cancel(self._indicator_after)
+            self._indicator_after = None
+
+    def _tick_playing_indicator(self) -> None:
+        if not (self.play_thread and self.play_thread.is_alive()):
+            self._indicator_after = None
+            return
+        phases = ["\u25cf\u00a0\u00a0", "\u00a0\u25cf\u00a0", "\u00a0\u00a0\u25cf"]
+        c = getattr(self, "_c", {"accent": UI_ACCENT, "muted": UI_MUTED})
+        # Subtle pulse in title bar area via status
+        if hasattr(self, "loaded_midi_name"):
+            name = self.loaded_midi_name.get()
+            if name and name != "No MIDI loaded":
+                dot = phases[self._indicator_phase % 3]
+                self.title(f"{dot} {APP_TITLE} - {self.song_title.get()}" +
+                          ("*" if self._is_dirty else ""))
+        self._indicator_phase += 1
+        self._indicator_after = self.after(400, self._tick_playing_indicator)
 
     def _test_note_worker(self, midi_note: int, note_name: str, hold_seconds: float, start_delay: float) -> None:
         binding = KEY_MAP[midi_note]
