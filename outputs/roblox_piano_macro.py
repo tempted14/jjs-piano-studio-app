@@ -4372,6 +4372,38 @@ class PianoMacroApp(tk.Tk):
             self.draw_keyboard_preview()
         self.status.set(f"Theme: {'Dark' if self._is_dark_theme else 'Light'}")
 
+    def _show_shortcuts(self) -> None:
+        text = (
+            "Keyboard Shortcuts\n\n"
+            "F1              Show this help\n"
+            "F6              Play (customizable)\n"
+            "F7              Pause/Resume (customizable)\n"
+            "F8              Stop (customizable)\n\n"
+            "Ctrl+S          Save current song\n"
+            "Ctrl+N          New song\n"
+            "Ctrl+O          Load MIDI file\n"
+            "Ctrl+F          Focus library search\n"
+            "Double-click    Load selected library entry\n"
+            "Right-click     Library context menu\n\n"
+            "Score text:\n"
+            "  Notes:    C4 D4 E4 F4 G4 A4 B4 C5\n"
+            "  Chords:   [C4 E4 G4]:2\n"
+            "  Rests:    R:1  or  -:0.5\n"
+            "  Durations: C4:0.5  G4:2\n"
+            "  Raw keys: key:q  key:Q  key:!"
+        )
+        c = getattr(self, "_c", {"bg": "#1a1a1a", "text": "#e6e6e6", "accent": "#58a6ff", "muted": "#888"})
+        win = tk.Toplevel(self)
+        win.title("Shortcuts")
+        win.geometry("420x480")
+        win.configure(bg=c["bg"])
+        win.transient(self)
+        frame = ttk.Frame(win, padding=20)
+        frame.pack(fill=tk.BOTH, expand=True)
+        lbl = tk.Label(frame, text=text, bg=c["bg"], fg=c["text"], font=("Consolas", 10), justify=tk.LEFT, anchor="nw")
+        lbl.pack(fill=tk.BOTH, expand=True)
+        ttk.Button(frame, text="Close", command=win.destroy).pack(pady=(12, 0))
+
     def _apply_dark_titlebar(self) -> None:
         """Set Windows 10/11 title bar to dark mode via DWM API."""
         if not sys.platform.startswith("win"):
@@ -4506,6 +4538,11 @@ class PianoMacroApp(tk.Tk):
 
         nfo = ttk.Label(control_bar, textvariable=self.loaded_midi_name, style="Muted.TLabel")
         nfo.grid(row=0, column=6, columnspan=2, sticky="e")
+
+        help_btn = ttk.Button(control_bar, text="?", width=3, command=self._show_shortcuts)
+        help_btn.grid(row=0, column=5, padx=(4, 4))
+        self._add_tooltip(help_btn, "Show keyboard shortcuts (F1)")
+        self.bind_all("<F1>", lambda _e: self._show_shortcuts())
 
         # ── Main paned area ──
         paned = ttk.Panedwindow(root, orient=tk.HORIZONTAL)
