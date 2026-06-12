@@ -4322,6 +4322,22 @@ class PianoMacroApp(tk.Tk):
                 self.status.set("MIDI synth ready. Use sidebar to change instrument.")
         except Exception:
             self.synth = None
+        self._apply_dark_titlebar()
+
+    def _apply_dark_titlebar(self) -> None:
+        """Set Windows 10/11 title bar to dark mode via DWM API."""
+        if not sys.platform.startswith("win"):
+            return
+        try:
+            DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+            hwnd = ctypes.windll.user32.GetParent(self.winfo_id())
+            value = ctypes.c_int(1)
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE,
+                ctypes.byref(value), ctypes.sizeof(value)
+            )
+        except Exception:
+            pass
 
     def _on_synth_toggle(self) -> None:
         if not self.synth and self.synth_enabled.get():
@@ -5176,117 +5192,79 @@ class PianoMacroApp(tk.Tk):
             return
         canvas: tk.Canvas = self.keyboard_canvas
         canvas.delete("all")
-        self.preview_items.clear()
-        self.preview_rects.clear()
-        self.preview_text.clear()
-        self.preview_is_black.clear()
+        self.preview_items.clear(); self.preview_rects.clear()
+        self.preview_text.clear(); self.preview_is_black.clear()
 
         width = max(600, canvas.winfo_width())
         height = max(110, canvas.winfo_height())
-        white_height = height - 18
-        black_height = int(white_height * 0.62)
-        white_width = width / len(WHITE_MIDI_NOTES)
-        white_positions: dict[int, int] = {midi_note: index for index, midi_note in enumerate(WHITE_MIDI_NOTES)}
-
         c = getattr(self, "_c", {"kw": UI_KEY_WHITE, "kwa": UI_KEY_WHITE_ACTIVE,
                                   "kb": UI_KEY_BLACK, "kba": UI_KEY_BLACK_ACTIVE,
-                                  "ko": UI_KEY_OUTLINE, "muted": UI_MUTED, "field": UI_FIELD,
-                                  "accent": UI_ACCENT})
+                                  "ko": UI_KEY_OUTLINE, "muted": UI_MUTED, "field": UI_FIELD})
+        margin = 2
+        white_height = height - 28
+        black_height = int(white_height * 0.60)
+        white_width = (width - margin * 2) / len(WHITE_MIDI_NOTES)
+        white_positions = {midi_note: index for index, midi_note in enumerate(WHITE_MIDI_NOTES)}
+        dark = getattr(self, "_is_dark_theme", True)
+
         for index, midi_note in enumerate(WHITE_MIDI_NOTES):
-            x0 = index * white_width
-            x1 = (index + 1) * white_width
+            x0 = margin + index * white_width
+            x1 = margin + (index + 1) * white_width
             in_scale = not self.scale_highlighted or midi_note in self.scale_highlighted
-            if midi_note in self.preview_active_notes:
-                fill = c["kwa"]
-            elif not in_scale:
-                fill = "#1a1f26" if getattr(self, "_is_dark_theme", True) else "#d0d5d9"
-            else:
-                fill = c["kw"]
-            rect = canvas.create_rectangle(x0, 0, x1, white_height, fill=fill, outline=c["ko"])
+            active = midi_note in self.preview_active_notes
+            if active: top_c, bot_c, out_c = "#7cc8ff", "#2d9df0", "#1a6fc4"
+            elif not in_scale: top_c, bot_c, out_c = "#1e2229", "#14171c", "#1a1d23"
+            else: top_c, bot_c, out_c = ("#e8ecf1", "#c8ced6", c["ko"]) if dark else ("#fafbfc", "#e1e4e8", c["ko"])
+            for step in range(int(white_height)):
+                t = step / white_height
+                r = int(int(top_c[1:3],16)*(1-t)+int(bot_c[1:3],16)*t)
+                g = int(int(top_c[3:5],16)*(1-t)+int(bot_c[3:5],16)*t)
+                b = int(int(top_c[5:7],16)*(1-t)+int(bot_c[5:7],16)*t)
+                canvas.create_line(x0+1, step, x1-1, step, fill=f"#{r:02x}{g:02x}{b:02x}", tags="kb")
+            rect = canvas.create_rectangle(x0, 0, x1, white_height, fill="", outline=out_c, width=1, tags="kb")
             binding = KEY_MAP[midi_note]
-            note_text = canvas.create_text(
-                (x0 + x1) / 2,
-                white_height - 26,
-                text=midi_to_note_name(midi_note),
-                fill="#3b4550",
-                font=("Segoe UI", 7),
-            )
-            key_text = canvas.create_text(
-                (x0 + x1) / 2,
-                white_height - 10,
-                text=binding.label,
-                fill="#657180",
-                font=("Segoe UI", 8, "bold"),
-            )
-            self.preview_items[midi_note] = [rect, note_text, key_text]
-            self.preview_rects[midi_note] = rect
-            self.preview_text[midi_note] = [note_text, key_text]
-            self.preview_is_black[midi_note] = False
+            canvas.create_text((x0+x1)/2, white_height-22, text=midi_to_note_name(midi_note),
+                              fill="#8899aa" if dark else "#667788", font=("Segoe UI", 7), tags="kb")
+            canvas.create_text((x0+x1)/2, white_height-7, text=binding.label,
+                              fill="#556677" if dark else "#445566", font=("Segoe UI", 8, "bold"), tags="kb")
+            self.preview_items[midi_note] = [rect]; self.preview_rects[midi_note] = rect
+            self.preview_text[midi_note] = []; self.preview_is_black[midi_note] = False
 
         for midi_note in BLACK_MIDI_NOTES:
-            previous_white = midi_note - 1
-            while previous_white not in white_positions and previous_white >= min(WHITE_MIDI_NOTES):
-                previous_white -= 1
-            if previous_white not in white_positions:
-                continue
-            index = white_positions[previous_white]
-            black_width = white_width * 0.62
-            center = (index + 1) * white_width
-            x0 = center - black_width / 2
-            x1 = center + black_width / 2
-            fill = c["kba"] if midi_note in self.preview_active_notes else c["kb"]
+            prev = midi_note - 1
+            while prev not in white_positions and prev >= min(WHITE_MIDI_NOTES): prev -= 1
+            if prev not in white_positions: continue
+            index = white_positions[prev]
+            bw = white_width * 0.58
+            center = margin + (index + 1) * white_width
+            x0, x1 = center - bw/2, center + bw/2
+            active = midi_note in self.preview_active_notes
             in_scale = not self.scale_highlighted or midi_note in self.scale_highlighted
-            if not in_scale and midi_note not in self.preview_active_notes:
-                fill = "#0a0d12" if getattr(self, "_is_dark_theme", True) else "#b0b5ba"
-            rect = canvas.create_rectangle(x0, 0, x1, black_height, fill=fill, outline="#020409")
+            if active: top_c, bot_c = "#45b0ff", "#1870d0"
+            elif not in_scale: top_c, bot_c = "#111318", "#080a0d"
+            else: top_c, bot_c = "#2a2e36", "#101318"
+            for step in range(int(black_height)):
+                t = step / black_height
+                r = int(int(top_c[1:3],16)*(1-t)+int(bot_c[1:3],16)*t)
+                g = int(int(top_c[3:5],16)*(1-t)+int(bot_c[3:5],16)*t)
+                b = int(int(top_c[5:7],16)*(1-t)+int(bot_c[5:7],16)*t)
+                canvas.create_line(x0+2, step, x1-2, step, fill=f"#{r:02x}{g:02x}{b:02x}", tags="kb")
+            canvas.create_rectangle(x0+1, black_height, x1-1, black_height+3, fill="#00000020", outline="", tags="kb")
+            rect = canvas.create_rectangle(x0, 0, x1, black_height, fill="", outline="#0a0d12", width=1, tags="kb")
             binding = KEY_MAP[midi_note]
-            key_text = canvas.create_text(
-                (x0 + x1) / 2,
-                black_height - 16,
-                text=binding.label,
-                fill="#ffffff",
-                font=("Segoe UI", 8, "bold"),
-            )
-            self.preview_items[midi_note] = [rect, key_text]
-            self.preview_rects[midi_note] = rect
-            self.preview_text[midi_note] = [key_text]
-            self.preview_is_black[midi_note] = True
+            canvas.create_text((x0+x1)/2, black_height-12, text=binding.label,
+                              fill="#ffffffcc", font=("Segoe UI", 7, "bold"), tags="kb")
+            self.preview_items[midi_note] = [rect]; self.preview_rects[midi_note] = rect
+            self.preview_text[midi_note] = []; self.preview_is_black[midi_note] = True
 
-        canvas.create_text(
-            8,
-            height - 8,
-            anchor="sw",
-            text="C2",
-            fill=UI_MUTED,
-            font=("Segoe UI", 8, "bold"),
-        )
-        canvas.create_text(
-            width - 8,
-            height - 8,
-            anchor="se",
-            text="C7",
-            fill=UI_MUTED,
-            font=("Segoe UI", 8, "bold"),
-        )
+        canvas.create_text(10, height-10, anchor="sw", text="C2", fill=c["muted"], font=("Segoe UI", 8, "bold"))
+        canvas.create_text(width-10, height-10, anchor="se", text="C7", fill=c["muted"], font=("Segoe UI", 8, "bold"))
         self._draw_metronome_indicator()
 
     def _apply_keyboard_highlights(self) -> None:
         if not hasattr(self, "keyboard_canvas"):
             return
-        c = getattr(self, "_c", {"kw": UI_KEY_WHITE, "kwa": UI_KEY_WHITE_ACTIVE,
-                                  "kb": UI_KEY_BLACK, "kba": UI_KEY_BLACK_ACTIVE})
-        for midi_note, rect in self.preview_rects.items():
-            active = midi_note in self.preview_active_notes
-            is_black = self.preview_is_black.get(midi_note, False)
-            vel = self.preview_note_velocities.get(midi_note, 100) / 127.0
-            if active:
-                if is_black:
-                    fill = f"#{min(255,int(40+vel*215)):02x}{min(255,int(166+vel*89)):02x}{min(255,int(255-vel*20)):02x}"
-                else:
-                    fill = f"#{min(255,int(88+vel*167)):02x}{min(255,int(166+vel*89)):02x}{min(255,int(255-vel*10)):02x}"
-            else:
-                fill = c["kb"] if is_black else c["kw"]
-            self.keyboard_canvas.itemconfigure(rect, fill=fill)
+        self.draw_keyboard_preview()
 
     def highlight_midi_notes(self, notes: set[int], add: bool = False) -> None:
         self.after(0, lambda: self._highlight_midi_notes(notes, add=add))
