@@ -4534,7 +4534,7 @@ class PianoMacroApp(tk.Tk):
 
         editor_actions = ttk.Frame(editor_frame)
         editor_actions.grid(row=1, column=0, sticky="ew", pady=(8, 4))
-        ttk.Label(editor_actions, text="Song text", style="Section.TLabel").pack(side=tk.LEFT)
+        ttk.Label(editor_actions, text="\u270e  Song text", style="Section.TLabel").pack(side=tk.LEFT)
         ttk.Button(editor_actions, text="⚡  Analyze", command=self.analyze_current_source).pack(side=tk.RIGHT, padx=(6, 0))
         ttk.Button(editor_actions, text="⏱  Timeline", command=self.open_timeline_editor).pack(side=tk.RIGHT, padx=(6, 0))
         ttk.Button(editor_actions, text="✨  Auto Cleanup MIDI", command=self.cleanup_loaded_midi_playability).pack(
@@ -4568,7 +4568,7 @@ class PianoMacroApp(tk.Tk):
         keyboard_frame = ttk.Frame(editor_frame)
         keyboard_frame.grid(row=3, column=0, sticky="ew", pady=(10, 0))
         keyboard_frame.columnconfigure(0, weight=1)
-        ttk.Label(keyboard_frame, text="Preview keyboard", style="Section.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(keyboard_frame, text="\u266b  Preview keyboard", style="Section.TLabel").grid(row=0, column=0, sticky="w")
         self.keyboard_canvas = tk.Canvas(
             keyboard_frame, height=132, bg=c["field"],
             highlightthickness=1, highlightbackground=c["border"], highlightcolor=c["accent"],
@@ -4592,7 +4592,7 @@ class PianoMacroApp(tk.Tk):
         paned.add(side_container, weight=1)
 
         row = 0
-        ttk.Label(side, text="Playback", style="Section.TLabel").grid(row=row, column=0, columnspan=2, sticky="w")
+        ttk.Label(side, text="▶  Playback", style="Section.TLabel").grid(row=row, column=0, columnspan=2, sticky="w")
         row += 1
         self._spin(side, row, "BPM", self.bpm, 20, 320, 1)
         row += 1
@@ -4647,7 +4647,7 @@ class PianoMacroApp(tk.Tk):
 
         ttk.Separator(side).grid(row=row, column=0, columnspan=2, sticky="ew", pady=12)
         row += 1
-        ttk.Label(side, text="Analysis", style="Section.TLabel").grid(row=row, column=0, columnspan=2, sticky="w")
+        ttk.Label(side, text="⚡  Analysis", style="Section.TLabel").grid(row=row, column=0, columnspan=2, sticky="w")
         row += 1
         ttk.Label(side, textvariable=self.analysis_summary, wraplength=270, justify=tk.LEFT, style="Muted.TLabel").grid(
             row=row, column=0, columnspan=2, sticky="ew"
@@ -4660,7 +4660,7 @@ class PianoMacroApp(tk.Tk):
 
         ttk.Separator(side).grid(row=row, column=0, columnspan=2, sticky="ew", pady=12)
         row += 1
-        ttk.Label(side, text="Timing Repair", style="Section.TLabel").grid(
+        ttk.Label(side, text="⏱  Timing Repair", style="Section.TLabel").grid(
             row=row, column=0, columnspan=2, sticky="w"
         )
         row += 1
@@ -4687,7 +4687,7 @@ class PianoMacroApp(tk.Tk):
 
         ttk.Separator(side).grid(row=row, column=0, columnspan=2, sticky="ew", pady=12)
         row += 1
-        ttk.Label(side, text="Calibration", style="Section.TLabel").grid(
+        ttk.Label(side, text="♫  Calibration", style="Section.TLabel").grid(
             row=row, column=0, columnspan=2, sticky="w"
         )
         row += 1
@@ -4716,7 +4716,7 @@ class PianoMacroApp(tk.Tk):
 
         ttk.Separator(side).grid(row=row, column=0, columnspan=2, sticky="ew", pady=12)
         row += 1
-        ttk.Label(side, text="Hotkeys", style="Section.TLabel").grid(row=row, column=0, columnspan=2, sticky="w")
+        ttk.Label(side, text="⌨  Hotkeys", style="Section.TLabel").grid(row=row, column=0, columnspan=2, sticky="w")
         row += 1
         ttk.Label(side, text="Play").grid(row=row, column=0, sticky="w", pady=4)
         ttk.Button(side, textvariable=self.play_hotkey, command=lambda: self.begin_hotkey_capture("Play", self.play_hotkey)).grid(
@@ -4736,7 +4736,7 @@ class PianoMacroApp(tk.Tk):
 
         ttk.Separator(side).grid(row=row, column=0, columnspan=2, sticky="ew", pady=12)
         row += 1
-        ttk.Label(side, text="Text format", style="Section.TLabel").grid(row=row, column=0, columnspan=2, sticky="w")
+        ttk.Label(side, text="✎  Text format", style="Section.TLabel").grid(row=row, column=0, columnspan=2, sticky="w")
         row += 1
         help_text = (
             "Notes: C4 D#4 Bb3\n"
@@ -4767,7 +4767,7 @@ class PianoMacroApp(tk.Tk):
         self._bind_mousewheel_to_canvas(side_container, side_canvas)
 
     def _build_library_panel(self, parent: ttk.Frame) -> None:
-        ttk.Label(parent, text="Song Library", style="Section.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(parent, text="\u2630  Song Library", style="Section.TLabel").grid(row=0, column=0, sticky="w")
 
         self.library_search_var = tk.StringVar(value="")
         self.library_search_var.trace_add("write", lambda *_: self.refresh_library_list())
