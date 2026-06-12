@@ -299,8 +299,7 @@ def coalesce_scheduled_actions(
 def load_midi_actions(path: str, track_indices: set[int] | None = None) -> list[ScheduledAction]:
     if mido is None:
         raise RuntimeError("MIDI support needs mido. Install it with: python -m pip install mido")
-    midi_path = Path(path)
-    mid = mido.MidiFile(midi_path)
+    mid = mido.MidiFile(path)
     actions: list[ScheduledAction] = []
     current = 0.0
     track_num = -1
@@ -4349,13 +4348,13 @@ class PianoMacroApp(tk.Tk):
             self.synth.program_change(prog)
             self.status.set(f"Instrument: {self.synth_instrument.get()}")
 
-    def _synth_note_on(self, midi_note: int, velocity: int = 100) -> None:
-        if self.synth and self.synth_enabled.get() and self.synth._handle:
-            vol = max(1, min(127, int(self.synth_volume.get() * velocity / 100)))
+    def _synth_note_on(self, midi_note: int, velocity: int = 100, synth_on: bool = True, synth_vol: int = 100) -> None:
+        if self.synth and synth_on and self.synth._handle:
+            vol = max(1, min(127, int(synth_vol * velocity / 100)))
             self.synth.note_on(midi_note, vol)
 
-    def _synth_note_off(self, midi_note: int) -> None:
-        if self.synth and self.synth_enabled.get() and self.synth._handle:
+    def _synth_note_off(self, midi_note: int, synth_on: bool = True) -> None:
+        if self.synth and synth_on and self.synth._handle:
             self.synth.note_off(midi_note)
 
     def _metronome_tick(self) -> None:
@@ -5212,23 +5211,20 @@ class PianoMacroApp(tk.Tk):
             x1 = margin + (index + 1) * white_width
             in_scale = not self.scale_highlighted or midi_note in self.scale_highlighted
             active = midi_note in self.preview_active_notes
-            if active: top_c, bot_c, out_c = "#7cc8ff", "#2d9df0", "#1a6fc4"
-            elif not in_scale: top_c, bot_c, out_c = "#1e2229", "#14171c", "#1a1d23"
-            else: top_c, bot_c, out_c = ("#e8ecf1", "#c8ced6", c["ko"]) if dark else ("#fafbfc", "#e1e4e8", c["ko"])
-            for step in range(int(white_height)):
-                t = step / white_height
-                r = int(int(top_c[1:3],16)*(1-t)+int(bot_c[1:3],16)*t)
-                g = int(int(top_c[3:5],16)*(1-t)+int(bot_c[3:5],16)*t)
-                b = int(int(top_c[5:7],16)*(1-t)+int(bot_c[5:7],16)*t)
-                canvas.create_line(x0+1, step, x1-1, step, fill=f"#{r:02x}{g:02x}{b:02x}", tags="kb")
-            rect = canvas.create_rectangle(x0, 0, x1, white_height, fill="", outline=out_c, width=1, tags="kb")
+            if active:
+                fill = c["kwa"]
+            elif not in_scale:
+                fill = "#1e2229" if dark else "#d0d5d9"
+            else:
+                fill = c["kw"]
+            rect = canvas.create_rectangle(x0, 0, x1, white_height, fill=fill, outline=c["ko"], width=1)
             binding = KEY_MAP[midi_note]
             canvas.create_text((x0+x1)/2, white_height-22, text=midi_to_note_name(midi_note),
-                              fill="#8899aa" if dark else "#667788", font=("Segoe UI", 7), tags="kb")
+                              fill="#8899aa" if dark else "#667788", font=("Segoe UI", 7))
             canvas.create_text((x0+x1)/2, white_height-7, text=binding.label,
-                              fill="#556677" if dark else "#445566", font=("Segoe UI", 8, "bold"), tags="kb")
-            self.preview_items[midi_note] = [rect]; self.preview_rects[midi_note] = rect
-            self.preview_text[midi_note] = []; self.preview_is_black[midi_note] = False
+                              fill="#556677" if dark else "#445566", font=("Segoe UI", 8, "bold"))
+            self.preview_rects[midi_note] = rect
+            self.preview_is_black[midi_note] = False
 
         for midi_note in BLACK_MIDI_NOTES:
             prev = midi_note - 1
@@ -5240,22 +5236,18 @@ class PianoMacroApp(tk.Tk):
             x0, x1 = center - bw/2, center + bw/2
             active = midi_note in self.preview_active_notes
             in_scale = not self.scale_highlighted or midi_note in self.scale_highlighted
-            if active: top_c, bot_c = "#45b0ff", "#1870d0"
-            elif not in_scale: top_c, bot_c = "#111318", "#080a0d"
-            else: top_c, bot_c = "#2a2e36", "#101318"
-            for step in range(int(black_height)):
-                t = step / black_height
-                r = int(int(top_c[1:3],16)*(1-t)+int(bot_c[1:3],16)*t)
-                g = int(int(top_c[3:5],16)*(1-t)+int(bot_c[3:5],16)*t)
-                b = int(int(top_c[5:7],16)*(1-t)+int(bot_c[5:7],16)*t)
-                canvas.create_line(x0+2, step, x1-2, step, fill=f"#{r:02x}{g:02x}{b:02x}", tags="kb")
-            canvas.create_rectangle(x0+1, black_height, x1-1, black_height+3, fill="#00000020", outline="", tags="kb")
-            rect = canvas.create_rectangle(x0, 0, x1, black_height, fill="", outline="#0a0d12", width=1, tags="kb")
+            if active:
+                fill = c["kba"]
+            elif not in_scale:
+                fill = "#111318" if dark else "#b0b5ba"
+            else:
+                fill = c["kb"]
+            rect = canvas.create_rectangle(x0, 0, x1, black_height, fill=fill, outline="#0a0d12", width=1)
             binding = KEY_MAP[midi_note]
             canvas.create_text((x0+x1)/2, black_height-12, text=binding.label,
-                              fill="#ffffffcc", font=("Segoe UI", 7, "bold"), tags="kb")
-            self.preview_items[midi_note] = [rect]; self.preview_rects[midi_note] = rect
-            self.preview_text[midi_note] = []; self.preview_is_black[midi_note] = True
+                              fill="#ffffffcc", font=("Segoe UI", 7, "bold"))
+            self.preview_rects[midi_note] = rect
+            self.preview_is_black[midi_note] = True
 
         canvas.create_text(10, height-10, anchor="sw", text="C2", fill=c["muted"], font=("Segoe UI", 8, "bold"))
         canvas.create_text(width-10, height-10, anchor="se", text="C7", fill=c["muted"], font=("Segoe UI", 8, "bold"))
@@ -5264,7 +5256,21 @@ class PianoMacroApp(tk.Tk):
     def _apply_keyboard_highlights(self) -> None:
         if not hasattr(self, "keyboard_canvas"):
             return
-        self.draw_keyboard_preview()
+        c = getattr(self, "_c", {"kw": UI_KEY_WHITE, "kwa": UI_KEY_WHITE_ACTIVE,
+                                  "kb": UI_KEY_BLACK, "kba": UI_KEY_BLACK_ACTIVE})
+        for midi_note, rect in self.preview_rects.items():
+            active = midi_note in self.preview_active_notes
+            is_black = self.preview_is_black.get(midi_note, False)
+            vel = self.preview_note_velocities.get(midi_note, 100) / 127.0
+            if active:
+                if is_black:
+                    r, g, b = min(255,int(40+vel*215)), min(255,int(166+vel*89)), min(255,int(255-vel*20))
+                else:
+                    r, g, b = min(255,int(88+vel*167)), min(255,int(166+vel*89)), min(255,int(255-vel*10))
+                fill = f"#{r:02x}{g:02x}{b:02x}"
+            else:
+                fill = c["kb"] if is_black else c["kw"]
+            self.keyboard_canvas.itemconfigure(rect, fill=fill)
 
     def highlight_midi_notes(self, notes: set[int], add: bool = False) -> None:
         self.after(0, lambda: self._highlight_midi_notes(notes, add=add))
@@ -8339,12 +8345,26 @@ class PianoMacroApp(tk.Tk):
             messagebox.showerror("Could not start", str(exc))
             return
 
+        worker_state = {
+            "loop_enabled": bool(self.loop_enabled.get()),
+            "loop_start": float(self.loop_start_sec.get()),
+            "loop_end": float(self.loop_end_sec.get()),
+            "practice_mode": bool(self.practice_mode.get()),
+            "practice_start": float(self.practice_start_speed.get()),
+            "practice_target": float(self.practice_target_speed.get()),
+            "practice_inc": float(self.practice_increment.get()),
+            "practice_loops": int(self.practice_loops_per_step.get()),
+            "metronome": bool(self.metronome_enabled.get()),
+            "synth_on": bool(self.synth_enabled.get()),
+            "synth_vol": int(self.synth_volume.get()),
+        }
+
         self.stop_event.clear()
         self.pause_event.clear()
         self.progress.set(0.0)
         self.play_thread = threading.Thread(
             target=self._play_worker,
-            args=(actions, settings, source_name, preview_only),
+            args=(actions, settings, source_name, preview_only, worker_state),
             daemon=True,
         )
         self.play_thread.start()
@@ -8423,20 +8443,22 @@ class PianoMacroApp(tk.Tk):
         settings: PlaybackSettings,
         source_name: str,
         preview_only: bool,
+        ws: dict[str, object],
     ) -> None:
         timer_enabled = begin_high_resolution_timer()
-        loop_enabled = bool(self.loop_enabled.get())
-        loop_start = max(0.0, float(self.loop_start_sec.get()))
-        loop_end = max(0.0, float(self.loop_end_sec.get()))
+        loop_enabled = bool(ws["loop_enabled"])
+        loop_start = max(0.0, float(ws["loop_start"]))
+        loop_end = max(0.0, float(ws["loop_end"]))
         if loop_enabled and loop_end > 0 and loop_end <= loop_start:
             loop_end = 0.0
         loop_count = 0
-        practice = bool(self.practice_mode.get()) and loop_enabled
+        practice = bool(ws["practice_mode"]) and loop_enabled
+        metronome_on = bool(ws["metronome"])
         if practice:
-            current_speed = max(0.10, float(self.practice_start_speed.get()))
-            target_speed = max(current_speed, float(self.practice_target_speed.get()))
-            increment = max(0.01, float(self.practice_increment.get()))
-            loops_per_step = max(1, int(self.practice_loops_per_step.get()))
+            current_speed = max(0.10, float(ws["practice_start"]))
+            target_speed = max(current_speed, float(ws["practice_target"]))
+            increment = max(0.01, float(ws["practice_inc"]))
+            loops_per_step = max(1, int(ws["practice_loops"]))
             self.practice_current_speed = current_speed
             self.practice_loop_count = 0
             settings.speed = current_speed
@@ -8489,9 +8511,8 @@ class PianoMacroApp(tk.Tk):
                     target = action.seconds / settings.speed
                     target_deadline = start_time + target
                     now = time.perf_counter()
-                    if now < target_deadline:
-                        if not wait_until_precise(target_deadline, self.stop_event, self.pause_event):
-                            continue
+                if now < target_deadline:
+                    if not wait_until_precise(target_deadline, self.stop_event, self.pause_event):
                         continue
 
                     bindings: list[KeyBinding] = []
@@ -8518,11 +8539,11 @@ class PianoMacroApp(tk.Tk):
                             for binding in sorted(unique_bindings, key=lambda item: item.shifted):
                                 self.sender.key_down(binding)
                         for sn, vel in synth_vel_map.items():
-                            self._synth_note_on(sn, vel)
+                            self._synth_note_on(sn, vel, bool(ws["synth_on"]), int(ws["synth_vol"]))
                             self.preview_note_velocities[sn] = vel
                         if preview_notes:
                             self.highlight_midi_notes(preview_notes, add=True)
-                        if bool(self.metronome_enabled.get()):
+                        if metronome_on:
                             beat_pos = action.seconds * settings.bpm / 60.0
                             if abs(beat_pos - round(beat_pos)) < 0.06:
                                 self.after(0, self._metronome_tick)
@@ -8531,7 +8552,7 @@ class PianoMacroApp(tk.Tk):
                             for binding in unique_bindings:
                                 self.sender.key_up(binding)
                         for sn in synth_notes:
-                            self._synth_note_off(sn)
+                            self._synth_note_off(sn, bool(ws["synth_on"]))
                             self.preview_note_velocities.pop(sn, None)
                         if preview_notes:
                             self.unhighlight_midi_notes(preview_notes)
@@ -8558,8 +8579,6 @@ class PianoMacroApp(tk.Tk):
                         self._thread_status(f"Practice complete! Reached {target_speed:.0%} speed.")
                         break
                 if not loop_enabled and not practice:
-                    break
-                if not loop_enabled:
                     break
                 if loop_count > 9999:
                     break
