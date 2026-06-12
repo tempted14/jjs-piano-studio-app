@@ -4467,8 +4467,24 @@ class PianoMacroApp(tk.Tk):
         s.configure("Horizontal.TProgressbar", troughcolor=c["field"], background=c["accent"], bordercolor=c["border"], thickness=self._ui["scale_thickness"])
         s.configure("TSeparator", background=c["border"])
         s.configure("TPanedwindow", background=c["bg"], sashwidth=self._ui["sash_width"])
-        s.configure("TScrollbar", background=c["surface"], troughcolor=c["field"], bordercolor=c["bg"], arrowcolor=c["muted"], width=self._ui["scrollbar_width"])
-        s.map("TScrollbar", background=[("active", c["surface2"])], arrowcolor=[("active", c["text"])])
+        s.configure("TScrollbar", background=c["surface"], troughcolor=c["field"], bordercolor=c["bg"],
+                     arrowcolor=c["muted"], darkcolor=c["surface"], lightcolor=c["surface2"],
+                     gripcount=0, arrowsize=self._s(10), width=self._ui["scrollbar_width"])
+        s.map("TScrollbar",
+              background=[("active", c["surface2"]), ("pressed", c["accent"])],
+              arrowcolor=[("active", c["text"]), ("pressed", c["text"])],
+              darkcolor=[("active", c["surface2"])],
+              lightcolor=[("active", c["surface2"])])
+        # Vertical scrollbars
+        s.configure("Vertical.TScrollbar", background=c["surface"], troughcolor=c["field"],
+                     bordercolor=c["bg"], arrowcolor=c["muted"],
+                     darkcolor=c["surface"], lightcolor=c["surface2"],
+                     gripcount=0, arrowsize=self._s(10), width=self._ui["scrollbar_width"])
+        s.map("Vertical.TScrollbar",
+              background=[("active", c["surface2"]), ("pressed", c["accent"])],
+              arrowcolor=[("active", c["text"]), ("pressed", c["text"])],
+              darkcolor=[("active", c["surface2"])],
+              lightcolor=[("active", c["surface2"])])
         s.configure("Horizontal.TScale", background=c["bg"], troughcolor=c["field"], bordercolor=c["border"])
 
         s.configure("Treeview", background=c["field"], foreground=c["text"], fieldbackground=c["field"],
@@ -4576,16 +4592,26 @@ class PianoMacroApp(tk.Tk):
 
     @staticmethod
     def _add_tooltip(widget: tk.Widget, text: str) -> None:
+        # Capture the root DPI scale once at binding time, not inside the nested
+        # callbacks (which have no `self` access).  This keeps tooltips scaled
+        # without re-introducing the `self` NameError.
+        try:
+            scale = float(widget.winfo_fpixels("1i")) / 96.0
+        except Exception:
+            scale = 1.0
+        fs = max(1, int(round(9 * scale)))
+
         def show(_event: tk.Event) -> None:
             tip = tk.Toplevel(widget)
             tip.wm_overrideredirect(True)
+            tip.configure(bg=UI_SURFACE_HOVER)
             tip.wm_geometry(f"+{widget.winfo_rootx() + widget.winfo_width() // 2}+{widget.winfo_rooty() - 28}")
             label = tk.Label(
                 tip,
                 text=text,
                 bg=UI_SURFACE_HOVER,
                 fg=UI_TEXT,
-                font=("Segoe UI", self._s(9)),
+                font=("Segoe UI", fs),
                 relief=tk.FLAT,
                 padx=8,
                 pady=3,
@@ -4718,16 +4744,16 @@ class PianoMacroApp(tk.Tk):
         editor_actions = ttk.Frame(editor_frame)
         editor_actions.grid(row=1, column=0, sticky="ew", pady=(8, 4))
         ttk.Label(editor_actions, text="\u270e  Song text", style="Section.TLabel").pack(side=tk.LEFT)
-        ttk.Button(editor_actions, text="⚡  Analyze", command=self.analyze_current_source).pack(side=tk.RIGHT, padx=(6, 0))
-        ttk.Button(editor_actions, text="⏱  Timeline", command=self.open_timeline_editor).pack(side=tk.RIGHT, padx=(6, 0))
-        ttk.Button(editor_actions, text="✨  Auto Cleanup MIDI", command=self.cleanup_loaded_midi_playability).pack(
-            side=tk.RIGHT, padx=(6, 0)
+        ttk.Button(editor_actions, text="⚡  Analyze", command=self.analyze_current_source).pack(side=tk.RIGHT, padx=(self._s(4), 0))
+        ttk.Button(editor_actions, text="⏱  Timeline", command=self.open_timeline_editor).pack(side=tk.RIGHT, padx=(self._s(4), 0))
+        ttk.Button(editor_actions, text="✨  Cleanup", command=self.cleanup_loaded_midi_playability).pack(
+            side=tk.RIGHT, padx=(self._s(4), 0)
         )
-        ttk.Button(editor_actions, text="↔  MIDI to Text", command=self.convert_loaded_midi_to_text).pack(
-            side=tk.RIGHT, padx=(6, 0)
+        ttk.Button(editor_actions, text="↔  Convert", command=self.convert_loaded_midi_to_text).pack(
+            side=tk.RIGHT, padx=(self._s(4), 0)
         )
-        ttk.Button(editor_actions, text="✓  Save Song", command=self.save_current_song, style="Accent.TButton").pack(
-            side=tk.RIGHT, padx=(6, 0)
+        ttk.Button(editor_actions, text="✓  Save", command=self.save_current_song, style="Accent.TButton").pack(
+            side=tk.RIGHT, padx=(self._s(4), 0)
         )
 
         self.score_text = tk.Text(editor_frame, wrap=tk.WORD, undo=True, font=("Consolas", self._s(11)), padx=self._s(48))
@@ -4763,7 +4789,7 @@ class PianoMacroApp(tk.Tk):
         side_container.columnconfigure(0, weight=1)
         side_container.rowconfigure(0, weight=1)
         side_canvas = tk.Canvas(side_container, bg=c["bg"], highlightthickness=0, borderwidth=0)
-        side_scrollbar = ttk.Scrollbar(side_container, orient=tk.VERTICAL, command=side_canvas.yview)
+        side_scrollbar = ttk.Scrollbar(side_container, orient=tk.VERTICAL, style="Vertical.TScrollbar", command=side_canvas.yview)
         side_canvas.configure(yscrollcommand=side_scrollbar.set)
         side_canvas.grid(row=0, column=0, sticky="nsew")
         side_scrollbar.grid(row=0, column=1, sticky="ns")
@@ -4985,7 +5011,7 @@ class PianoMacroApp(tk.Tk):
         self.library_listbox = tk.Listbox(list_frame, height=self._ui["library_height"], activestyle="dotbox", exportselection=False)
         self.library_listbox.grid(row=0, column=0, sticky="nsew")
         self._style_listbox(self.library_listbox)
-        scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.library_listbox.yview)
+        scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, style="Vertical.TScrollbar", command=self.library_listbox.yview)
         scrollbar.grid(row=0, column=1, sticky="ns")
         self.library_listbox.configure(yscrollcommand=scrollbar.set)
         self.library_listbox.bind("<Double-Button-1>", lambda _event: self.load_selected_song())
@@ -5048,7 +5074,7 @@ class PianoMacroApp(tk.Tk):
                                   "kb": UI_KEY_BLACK, "kba": UI_KEY_BLACK_ACTIVE,
                                   "ko": UI_KEY_OUTLINE, "muted": UI_MUTED, "field": UI_FIELD})
         margin = 2
-        white_height = height - 28
+        white_height = height - 18
         black_height = int(white_height * 0.60)
         white_width = (width - margin * 2) / len(WHITE_MIDI_NOTES)
         white_positions = {midi_note: index for index, midi_note in enumerate(WHITE_MIDI_NOTES)}
@@ -5058,21 +5084,22 @@ class PianoMacroApp(tk.Tk):
             x1 = margin + (index + 1) * white_width
             in_scale = not self.scale_highlighted or midi_note in self.scale_highlighted
             active = midi_note in self.preview_active_notes
-            if active: top_c, bot_c, out_c = "#7cc8ff", "#2d9df0", "#1a6fc4"
-            elif not in_scale: top_c, bot_c, out_c = "#1e2229", "#14171c", "#1a1d23"
-            else: top_c, bot_c, out_c = "#e8ecf1", "#c8ced6", c["ko"]
+            if active: top_c, bot_c, out_c, lbl_c = "#7cc8ff", "#2d9df0", "#1a6fc4", "#0a1a2a"
+            elif not in_scale: top_c, bot_c, out_c, lbl_c = "#1a1e25", "#10141a", "#1a1d23", "#3a4250"
+            else: top_c, bot_c, out_c, lbl_c = "#e8ecf1", "#c8ced6", c["ko"], "#3a4250"
+            # 3D gradient body
             for step in range(int(white_height)):
                 t = step / white_height
                 r = int(int(top_c[1:3],16)*(1-t)+int(bot_c[1:3],16)*t)
                 g = int(int(top_c[3:5],16)*(1-t)+int(bot_c[3:5],16)*t)
                 b = int(int(top_c[5:7],16)*(1-t)+int(bot_c[5:7],16)*t)
                 canvas.create_line(x0+1, step, x1-1, step, fill=f"#{r:02x}{g:02x}{b:02x}", tags="kb")
+            # Outline
             rect = canvas.create_rectangle(x0, 0, x1, white_height, fill="", outline=out_c, width=1, tags="kb")
+            # Single label (binding only) for clean look
             binding = KEY_MAP[midi_note]
-            canvas.create_text((x0+x1)/2, white_height-22, text=midi_to_note_name(midi_note),
-                              fill="#8899aa", font=("Segoe UI", self._s(7)), tags="kb")
-            canvas.create_text((x0+x1)/2, white_height-7, text=binding.label,
-                              fill="#556677", font=("Segoe UI", self._s(8), "bold"), tags="kb")
+            canvas.create_text((x0+x1)/2, white_height-8, text=binding.label,
+                              fill=lbl_c, font=("Segoe UI", self._s(8), "bold"), tags="kb")
             self.preview_rects[midi_note] = rect
             self.preview_is_black[midi_note] = False
 
@@ -5086,25 +5113,23 @@ class PianoMacroApp(tk.Tk):
             x0, x1 = center - bw/2, center + bw/2
             active = midi_note in self.preview_active_notes
             in_scale = not self.scale_highlighted or midi_note in self.scale_highlighted
-            if active: top_c, bot_c = "#45b0ff", "#1870d0"
-            elif not in_scale: top_c, bot_c = "#111318", "#080a0d"
-            else: top_c, bot_c = "#2a2e36", "#101318"
+            if active: top_c, bot_c, lbl_c = "#45b0ff", "#1870d0", "#ffffff"
+            elif not in_scale: top_c, bot_c, lbl_c = "#0c0f14", "#06080b", "#3a4250"
+            else: top_c, bot_c, lbl_c = "#2a2e36", "#101318", "#c9d1d9"
             for step in range(int(black_height)):
                 t = step / black_height
                 r = int(int(top_c[1:3],16)*(1-t)+int(bot_c[1:3],16)*t)
                 g = int(int(top_c[3:5],16)*(1-t)+int(bot_c[3:5],16)*t)
                 b = int(int(top_c[5:7],16)*(1-t)+int(bot_c[5:7],16)*t)
                 canvas.create_line(x0+2, step, x1-2, step, fill=f"#{r:02x}{g:02x}{b:02x}", tags="kb")
+            # Drop shadow at base
             canvas.create_rectangle(x0+1, black_height, x1-1, black_height+3, fill="#000000", outline="", tags="kb")
             rect = canvas.create_rectangle(x0, 0, x1, black_height, fill="", outline="#0a0d12", width=1, tags="kb")
             binding = KEY_MAP[midi_note]
             canvas.create_text((x0+x1)/2, black_height-12, text=binding.label,
-                              fill="#cccccc", font=("Segoe UI", self._s(7), "bold"), tags="kb")
+                              fill=lbl_c, font=("Segoe UI", self._s(7), "bold"), tags="kb")
             self.preview_rects[midi_note] = rect
             self.preview_is_black[midi_note] = True
-
-        canvas.create_text(10, height-10, anchor="sw", text="C2", fill=c["muted"], font=("Segoe UI", self._s(8), "bold"))
-        canvas.create_text(width-10, height-10, anchor="se", text="C7", fill=c["muted"], font=("Segoe UI", self._s(8), "bold"))
 
     def _apply_keyboard_highlights(self) -> None:
         if not hasattr(self, "keyboard_canvas"):
@@ -6258,7 +6283,7 @@ class PianoMacroApp(tk.Tk):
         columns = ("title", "author", "id", "plays", "notes", "updated", "source")
         tree = ttk.Treeview(tree_frame, columns=columns, show="headings", selectmode="browse", height=12)
         tree.grid(row=0, column=0, sticky="nsew")
-        scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=tree.yview)
+        scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, style="Vertical.TScrollbar", command=tree.yview)
         scrollbar.grid(row=0, column=1, sticky="ns")
         tree.configure(yscrollcommand=scrollbar.set)
         headings = {
