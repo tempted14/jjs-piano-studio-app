@@ -122,6 +122,9 @@ from jjs_piano_studio.models import (
 from jjs_piano_studio.sender import (
     begin_high_resolution_timer,
     end_high_resolution_timer,
+    KeySender,
+    MidiSynth,
+    MIDI_INSTRUMENTS,
     wait_until_precise,
 )
 
@@ -4075,6 +4078,10 @@ class PianoMacroApp(tk.Tk):
         self._configure_theme()
 
         self.sender = KeySender()
+        self.synth: MidiSynth | None = None
+        self.synth_enabled = tk.BooleanVar(value=True)
+        self.synth_instrument = tk.StringVar(value="Acoustic Grand Piano")
+        self.synth_volume = tk.IntVar(value=100)
         self.stop_event = threading.Event()
         self.pause_event = threading.Event()
         self.play_thread: threading.Thread | None = None
@@ -4140,6 +4147,13 @@ class PianoMacroApp(tk.Tk):
         self.loop_enabled = tk.BooleanVar(value=False)
         self.loop_start_sec = tk.DoubleVar(value=0.0)
         self.loop_end_sec = tk.DoubleVar(value=0.0)
+        self.practice_mode = tk.BooleanVar(value=False)
+        self.practice_start_speed = tk.DoubleVar(value=0.50)
+        self.practice_target_speed = tk.DoubleVar(value=1.0)
+        self.practice_increment = tk.DoubleVar(value=0.05)
+        self.practice_loops_per_step = tk.IntVar(value=2)
+        self.practice_current_speed = 1.0
+        self.practice_loop_count = 0
         self.midi_track_filter = tk.StringVar(value="All tracks")
         self.playback_queue: list[str] = []  # list of song IDs
         self.recent_midi_files: list[str] = []
@@ -4161,6 +4175,7 @@ class PianoMacroApp(tk.Tk):
         self.bind_all("<Control-Shift-e>", lambda _e: self.export_as_plain_text())
         self.bind_all("<F1>", lambda _e: self._show_shortcuts())
         self._auto_save_timer = self.after(120000, self._auto_save_tick)
+        self.after(200, self._init_synth)
         self._is_dirty = False
         self._setup_drag_drop()
         self._update_title()
@@ -4270,6 +4285,35 @@ class PianoMacroApp(tk.Tk):
     def _focus_library_search(self) -> None:
         if hasattr(self, "library_search_entry"):
             self.library_search_entry.focus_set()
+
+    def _init_synth(self) -> None:
+        try:
+            self.synth = MidiSynth()
+            if self.synth._handle is not None:
+                prog = MIDI_INSTRUMENTS.get(self.synth_instrument.get(), 0)
+                self.synth.program_change(prog)
+                self.status.set("MIDI synth ready. Use sidebar to change instrument.")
+        except Exception:
+            self.synth = None
+
+    def _on_synth_toggle(self) -> None:
+        if not self.synth and self.synth_enabled.get():
+            self._init_synth()
+
+    def _on_instrument_change(self, _event: object = None) -> None:
+        if self.synth and self.synth._handle is not None:
+            prog = MIDI_INSTRUMENTS.get(self.synth_instrument.get(), 0)
+            self.synth.program_change(prog)
+            self.status.set(f"Instrument: {self.synth_instrument.get()}")
+
+    def _synth_note_on(self, midi_note: int, velocity: int = 100) -> None:
+        if self.synth and self.synth_enabled.get() and self.synth._handle:
+            vol = max(1, min(127, int(self.synth_volume.get() * velocity / 100)))
+            self.synth.note_on(midi_note, vol)
+
+    def _synth_note_off(self, midi_note: int) -> None:
+        if self.synth and self.synth_enabled.get() and self.synth._handle:
+            self.synth.note_off(midi_note)
 
     def _auto_save_tick(self) -> None:
         if self._is_dirty and getattr(self, "current_song_id", None):
@@ -4762,6 +4806,39 @@ class PianoMacroApp(tk.Tk):
         self._spin(side, row, "Loop start (sec)", self.loop_start_sec, 0, 3600, 0.5)
         row += 1
         self._spin(side, row, "Loop end (sec)", self.loop_end_sec, 0, 3600, 0.5)
+        row += 1
+
+        ttk.Checkbutton(side, text="MIDI Synth output", variable=self.synth_enabled,
+                         command=self._on_synth_toggle).grid(
+            row=row, column=0, columnspan=2, sticky="w", pady=4
+        )
+        row += 1
+        ttk.Label(side, text="Instrument").grid(row=row, column=0, sticky="w", pady=4)
+        inst_combo = ttk.Combobox(
+            side, textvariable=self.synth_instrument,
+            values=list(MIDI_INSTRUMENTS.keys()), state="readonly", width=22,
+        )
+        inst_combo.grid(row=row, column=1, sticky="ew", pady=4)
+        inst_combo.bind("<<ComboboxSelected>>", self._on_instrument_change)
+        row += 1
+        self._spin(side, row, "Synth volume", self.synth_volume, 10, 127, 5)
+        row += 1
+
+        ttk.Separator(side).grid(row=row, column=0, columnspan=2, sticky="ew", pady=12)
+        row += 1
+        ttk.Label(side, text="Practice Mode", style="Section.TLabel").grid(row=row, column=0, columnspan=2, sticky="w")
+        row += 1
+        ttk.Checkbutton(side, text="Enable speed trainer", variable=self.practice_mode).grid(
+            row=row, column=0, columnspan=2, sticky="w", pady=4
+        )
+        row += 1
+        self._spin(side, row, "Start speed", self.practice_start_speed, 0.10, 1.0, 0.05)
+        row += 1
+        self._spin(side, row, "Target speed", self.practice_target_speed, 0.25, 3.0, 0.05)
+        row += 1
+        self._spin(side, row, "Speed increment", self.practice_increment, 0.01, 0.25, 0.01)
+        row += 1
+        self._spin(side, row, "Loops per step", self.practice_loops_per_step, 1, 10, 1)
         row += 1
 
         ttk.Separator(side).grid(row=row, column=0, columnspan=2, sticky="ew", pady=12)
@@ -5635,6 +5712,11 @@ class PianoMacroApp(tk.Tk):
                 ("timing_gap_ms", self.timing_gap_ms),
                 ("loop_start_sec", self.loop_start_sec),
                 ("loop_end_sec", self.loop_end_sec),
+                ("synth_volume", self.synth_volume),
+                ("practice_start_speed", self.practice_start_speed),
+                ("practice_target_speed", self.practice_target_speed),
+                ("practice_increment", self.practice_increment),
+                ("practice_loops_per_step", self.practice_loops_per_step),
             ]
             for key, variable in numeric_settings:
                 if key in data:
@@ -5645,11 +5727,18 @@ class PianoMacroApp(tk.Tk):
                 self.timing_auto_offset.set(bool(data["timing_auto_offset"]))
             if isinstance(data.get("loop_enabled"), bool):
                 self.loop_enabled.set(bool(data["loop_enabled"]))
+            if isinstance(data.get("synth_enabled"), bool):
+                self.synth_enabled.set(bool(data["synth_enabled"]))
+            if isinstance(data.get("practice_mode"), bool):
+                self.practice_mode.set(bool(data["practice_mode"]))
             if isinstance(data.get("is_dark_theme"), bool):
                 stored_theme = bool(data["is_dark_theme"])
                 if stored_theme != getattr(self, "_is_dark_theme", True):
                     self._is_dark_theme = stored_theme
                     self._configure_theme()
+            string_val = data.get("synth_instrument")
+            if isinstance(string_val, str) and string_val in MIDI_INSTRUMENTS:
+                self.synth_instrument.set(string_val)
 
             string_settings: list[tuple[str, tk.StringVar, list[str] | None]] = [
                 ("high_note", self.high_note, ["C6", "C7"]),
@@ -5701,6 +5790,14 @@ class PianoMacroApp(tk.Tk):
                 "loop_enabled": bool(self.loop_enabled.get()),
                 "loop_start_sec": float(self.loop_start_sec.get()),
                 "loop_end_sec": float(self.loop_end_sec.get()),
+                "synth_enabled": bool(self.synth_enabled.get()),
+                "synth_instrument": self.synth_instrument.get(),
+                "synth_volume": int(self.synth_volume.get()),
+                "practice_mode": bool(self.practice_mode.get()),
+                "practice_start_speed": float(self.practice_start_speed.get()),
+                "practice_target_speed": float(self.practice_target_speed.get()),
+                "practice_increment": float(self.practice_increment.get()),
+                "practice_loops_per_step": int(self.practice_loops_per_step.get()),
                 "is_dark_theme": bool(getattr(self, "_is_dark_theme", True)),
                 "play_hotkey": self.play_hotkey.get(),
                 "pause_hotkey": self.pause_hotkey.get(),
@@ -7836,6 +7933,8 @@ class PianoMacroApp(tk.Tk):
         self.stop_event.set()
         self.pause_event.clear()
         self.sender.release_all()
+        if self.synth:
+            self.synth.all_notes_off()
         self.clear_keyboard_highlights()
         self.status.set("Stopped.")
         self.progress.set(0.0)
@@ -7852,11 +7951,13 @@ class PianoMacroApp(tk.Tk):
                 return
 
             self.sender.key_down(binding)
+            self._synth_note_on(midi_note)
             self.highlight_midi_notes({midi_note})
             self._thread_progress(50.0)
             if not wait_until_precise(time.perf_counter() + hold_seconds, self.stop_event):
                 return
             self.sender.key_up(binding)
+            self._synth_note_off(midi_note)
             self.clear_keyboard_highlights()
             self._thread_progress(100.0)
             self._thread_status(f"Tested {note_name}. Phone tuner should show about {note_name}.")
@@ -7898,6 +7999,16 @@ class PianoMacroApp(tk.Tk):
         if loop_enabled and loop_end > 0 and loop_end <= loop_start:
             loop_end = 0.0
         loop_count = 0
+        practice = bool(self.practice_mode.get()) and loop_enabled
+        if practice:
+            current_speed = max(0.10, float(self.practice_start_speed.get()))
+            target_speed = max(current_speed, float(self.practice_target_speed.get()))
+            increment = max(0.01, float(self.practice_increment.get()))
+            loops_per_step = max(1, int(self.practice_loops_per_step.get()))
+            self.practice_current_speed = current_speed
+            self.practice_loop_count = 0
+            settings.speed = current_speed
+            self._thread_status(f"Practice mode: {current_speed:.0%} speed (target: {target_speed:.0%})")
         try:
             total = max(action.seconds for action in actions) if actions else 0.0
             loop_total = min(total, loop_end) - loop_start if loop_enabled and loop_end > 0 else total
@@ -7962,16 +8073,26 @@ class PianoMacroApp(tk.Tk):
                             preview_notes.add(preview_note)
 
                     unique_bindings = list({binding.label: binding for binding in bindings}.values())
+                    synth_notes: set[int] = set()
+                    for playable in action.notes:
+                        if playable.kind == "midi":
+                            fitted = self._fit_midi_note(int(playable.value) + settings.transpose, settings)
+                            if fitted is not None:
+                                synth_notes.add(fitted)
                     if action.action == "down":
                         if not preview_only:
                             for binding in sorted(unique_bindings, key=lambda item: item.shifted):
                                 self.sender.key_down(binding)
+                        for sn in synth_notes:
+                            self._synth_note_on(sn)
                         if preview_notes:
                             self.highlight_midi_notes(preview_notes, add=True)
                     else:
                         if not preview_only:
                             for binding in unique_bindings:
                                 self.sender.key_up(binding)
+                        for sn in synth_notes:
+                            self._synth_note_off(sn)
                         if preview_notes:
                             self.unhighlight_midi_notes(preview_notes)
 
@@ -7983,6 +8104,21 @@ class PianoMacroApp(tk.Tk):
                     index += 1
 
                 loop_count += 1
+                if practice:
+                    steps_done = loop_count // loops_per_step
+                    new_speed = min(target_speed, current_speed + steps_done * increment)
+                    if new_speed != settings.speed:
+                        settings.speed = new_speed
+                        self.practice_current_speed = new_speed
+                        self._thread_status(
+                            f"Practice: {new_speed:.0%} speed "
+                            f"(step {steps_done + 1}, loop {loop_count % loops_per_step + 1}/{loops_per_step})"
+                        )
+                    if new_speed >= target_speed and loop_count >= loops_per_step:
+                        self._thread_status(f"Practice complete! Reached {target_speed:.0%} speed.")
+                        break
+                if not loop_enabled and not practice:
+                    break
                 if not loop_enabled:
                     break
                 if loop_count > 9999:
@@ -8028,6 +8164,11 @@ class PianoMacroApp(tk.Tk):
         if self.listener is not None:
             try:
                 self.listener.stop()
+            except Exception:
+                pass
+        if self.synth:
+            try:
+                self.synth.close()
             except Exception:
                 pass
         self.destroy()
