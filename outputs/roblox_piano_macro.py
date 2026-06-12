@@ -4497,6 +4497,12 @@ class PianoMacroApp(tk.Tk):
             btn = ttk.Button(control_bar, text=f"{icon}  {label}", command=cmd, style=style)
             btn.grid(row=0, column=idx, padx=(0, 4))
             self._add_tooltip(btn, tip)
+            if label == "Play":
+                self._play_button = btn
+            elif label == "Pause":
+                self._pause_button = btn
+            elif label == "Stop":
+                self._stop_button = btn
 
         nfo = ttk.Label(control_bar, textvariable=self.loaded_midi_name, style="Muted.TLabel")
         nfo.grid(row=0, column=6, columnspan=2, sticky="e")
@@ -6727,12 +6733,30 @@ class PianoMacroApp(tk.Tk):
         self._stop_playing_indicator()
         self.status.set("Stopped.")
         self.progress.set(0.0)
+        self._update_play_buttons(playing=False)
 
     def _start_playing_indicator(self) -> None:
         if hasattr(self, "_indicator_after") and self._indicator_after:
             return
         self._indicator_phase = 0
         self._indicator_after = self.after(0, self._tick_playing_indicator)
+        self._update_play_buttons(playing=True)
+
+    def _stop_playing_indicator(self) -> None:
+        if hasattr(self, "_indicator_after") and self._indicator_after:
+            self.after_cancel(self._indicator_after)
+            self._indicator_after = None
+        self._update_play_buttons(playing=False)
+
+    def _update_play_buttons(self, playing: bool) -> None:
+        if hasattr(self, "_play_button"):
+            try:
+                if playing:
+                    self._play_button.configure(text="\u23f8  Playing...")
+                else:
+                    self._play_button.configure(text="\u25b6  Play")
+            except Exception:
+                pass
 
     def _stop_playing_indicator(self) -> None:
         if hasattr(self, "_indicator_after") and self._indicator_after:
