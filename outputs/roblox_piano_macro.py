@@ -122,9 +122,6 @@ from jjs_piano_studio.models import (
 from jjs_piano_studio.sender import (
     begin_high_resolution_timer,
     end_high_resolution_timer,
-    KeySender,
-    MidiSynth,
-    MIDI_INSTRUMENTS,
     wait_until_precise,
 )
 
@@ -296,30 +293,25 @@ def coalesce_scheduled_actions(
     return merged
 
 
-def load_midi_actions(path: str, track_indices: set[int] | None = None) -> list[ScheduledAction]:
+def load_midi_actions(path: str) -> list[ScheduledAction]:
     if mido is None:
         raise RuntimeError("MIDI support needs mido. Install it with: python -m pip install mido")
-    mid = mido.MidiFile(path)
+    midi_path = Path(path)
+    mid = mido.MidiFile(midi_path)
     actions: list[ScheduledAction] = []
     current = 0.0
-    track_num = -1
-    for track in mid.tracks:
-        track_num += 1
-        if track_indices is not None and track_num not in track_indices:
+    for msg in mid:
+        current += float(msg.time)
+        if not hasattr(msg, "channel"):
+            channel = None
+        else:
+            channel = msg.channel
+        if channel == 9:
             continue
-        current = 0.0
-        for msg in track:
-            current += float(msg.time)
-            if not hasattr(msg, "channel"):
-                channel = None
-            else:
-                channel = msg.channel
-            if channel == 9:
-                continue
-            if msg.type == "note_on" and msg.velocity > 0:
-                actions.append(ScheduledAction(current, "down", (Playable("midi", int(msg.note)),)))
-            elif msg.type == "note_off" or (msg.type == "note_on" and msg.velocity == 0):
-                actions.append(ScheduledAction(current, "up", (Playable("midi", int(msg.note)),)))
+        if msg.type == "note_on" and msg.velocity > 0:
+            actions.append(ScheduledAction(current, "down", (Playable("midi", int(msg.note)),)))
+        elif msg.type == "note_off" or (msg.type == "note_on" and msg.velocity == 0):
+            actions.append(ScheduledAction(current, "up", (Playable("midi", int(msg.note)),)))
 
     if not actions:
         raise ValueError("No playable note events were found in that MIDI file.")
@@ -329,27 +321,6 @@ def load_midi_actions(path: str, track_indices: set[int] | None = None) -> list[
         for action in sorted(actions, key=lambda item: (item.seconds, 0 if item.action == "up" else 1))
     ]
     return coalesce_scheduled_actions(normalized)
-
-
-def get_midi_track_info(path: str) -> list[dict[str, object]]:
-    if mido is None:
-        return []
-    mid = mido.MidiFile(path)
-    tracks: list[dict[str, object]] = []
-    for idx, track in enumerate(mid.tracks):
-        name = track.name or f"Track {idx + 1}"
-        note_count = sum(1 for m in track if m.type in ("note_on", "note_off"))
-        instruments: set[int] = set()
-        for m in track:
-            if hasattr(m, "channel") and m.channel is not None:
-                instruments.add(m.channel)
-        tracks.append({
-            "index": idx,
-            "name": name,
-            "notes": note_count,
-            "channels": sorted(instruments),
-        })
-    return tracks
 
 
 def online_sequence_url(sequence_id: str) -> str:
@@ -4077,10 +4048,6 @@ class PianoMacroApp(tk.Tk):
         self._configure_theme()
 
         self.sender = KeySender()
-        self.synth: MidiSynth | None = None
-        self.synth_enabled = tk.BooleanVar(value=True)
-        self.synth_instrument = tk.StringVar(value="Acoustic Grand Piano")
-        self.synth_volume = tk.IntVar(value=100)
         self.stop_event = threading.Event()
         self.pause_event = threading.Event()
         self.play_thread: threading.Thread | None = None
@@ -4105,11 +4072,6 @@ class PianoMacroApp(tk.Tk):
         self.preview_text: dict[int, list[int]] = {}
         self.preview_is_black: dict[int, bool] = {}
         self.preview_active_notes: set[int] = set()
-        self.preview_note_velocities: dict[int, int] = {}
-        self.metronome_active = False
-        self.scale_root = tk.StringVar(value="None")
-        self.scale_mode_var = tk.StringVar(value="major")
-        self.scale_highlighted: set[int] = set()
         self.listener = None
         self.pressed_hotkey_parts: set[str] = set()
         self.hotkey_capture_target: tuple[str, tk.StringVar] | None = None
@@ -4134,7 +4096,6 @@ class PianoMacroApp(tk.Tk):
         self.playback_start_offset = tk.DoubleVar(value=0.0)
         self.playback_end_at = tk.DoubleVar(value=0.0)
         self.transpose = tk.IntVar(value=0)
-        self.transpose.trace_add("write", lambda *_: self._preview_transpose_on_keyboard())
         self.high_note = tk.StringVar(value="C7")
         self.range_mode = tk.StringVar(value="Auto-fit octaves")
         self.input_method = tk.StringVar(value="Windows SendInput scan")
@@ -4148,23 +4109,6 @@ class PianoMacroApp(tk.Tk):
         self.timing_gap_ms = tk.DoubleVar(value=12.0)
         self.calibration_note = tk.StringVar(value="C7")
         self.calibration_hold_seconds = tk.DoubleVar(value=1.5)
-        self.loop_enabled = tk.BooleanVar(value=False)
-        self.loop_start_sec = tk.DoubleVar(value=0.0)
-        self.loop_end_sec = tk.DoubleVar(value=0.0)
-        self.metronome_enabled = tk.BooleanVar(value=False)
-        self.practice_mode = tk.BooleanVar(value=False)
-        self.practice_start_speed = tk.DoubleVar(value=0.50)
-        self.practice_target_speed = tk.DoubleVar(value=1.0)
-        self.practice_increment = tk.DoubleVar(value=0.05)
-        self.practice_loops_per_step = tk.IntVar(value=2)
-        self.practice_current_speed = 1.0
-        self.practice_loop_count = 0
-        self.midi_track_filter = tk.StringVar(value="All tracks")
-        self.playback_queue: list[str] = []  # list of song IDs
-        self.recent_midi_files: list[str] = []
-        self.recording = tk.BooleanVar(value=False)
-        self.recorded_events: list[tuple[float, str, str]] = []  # (timestamp, "down"/"up", label)
-        self.record_start_time = 0.0
         self.settings_loaded = False
 
         self._load_settings()
@@ -4177,17 +4121,11 @@ class PianoMacroApp(tk.Tk):
         self.bind_all("<Control-n>", lambda _e: self.new_song())
         self.bind_all("<Control-o>", lambda _e: self.load_midi())
         self.bind_all("<Control-f>", lambda _e: self._focus_library_search())
-        self.bind_all("<Control-g>", lambda _e: self._find_in_editor())
         self.bind_all("<Control-Shift-f>", lambda _e: self.toggle_favorite_song())
-        self.bind_all("<Control-Shift-v>", lambda _e: self.import_from_clipboard())
-        self.bind_all("<Control-Shift-e>", lambda _e: self.export_as_plain_text())
-        self.bind_all("<F1>", lambda _e: self._show_shortcuts())
-        self._auto_save_timer = self.after(120000, self._auto_save_tick)
-        self.after(200, self._init_synth)
         self._is_dirty = False
         self._setup_drag_drop()
         self._update_title()
-        self.score_text.bind("<<Modified>>", self._on_text_modified, add="+")
+        self.score_text.bind("<<Modified>>", self._on_text_modified)
         self.song_title.trace_add("write", lambda *_: self._mark_dirty())
         self.song_artist.trace_add("write", lambda *_: self._mark_dirty())
         self.song_tags.trace_add("write", lambda *_: self._mark_dirty())
@@ -4209,24 +4147,6 @@ class PianoMacroApp(tk.Tk):
         self.score_text.edit_modified(False)
         self._mark_dirty()
 
-    def _update_line_numbers(self, _event: object = None) -> None:
-        if not hasattr(self, "_line_numbers"):
-            return
-        canvas = self._line_numbers
-        canvas.delete("all")
-        c = getattr(self, "_c", {"field": UI_FIELD, "muted": UI_MUTED, "border": UI_BORDER})
-        first = self.score_text.index("@0,0")
-        last = self.score_text.index(f"@0,{self.score_text.winfo_height()}")
-        first_line = int(first.split(".")[0])
-        last_line = int(last.split(".")[0])
-        line_height = 17
-        for line_num in range(first_line, last_line + 1):
-            y = (line_num - first_line) * line_height + 4
-            canvas.create_text(38, y, text=str(line_num), fill=c["muted"],
-                              font=("Consolas", 9), anchor="ne")
-        canvas.configure(width=44)
-        canvas.create_line(43, 0, 43, canvas.winfo_height(), fill=c["border"])
-
     def _update_title(self) -> None:
         title = f"{'*' if self._is_dirty else ''}{APP_TITLE}"
         song = self.song_title.get().strip() or "Untitled Song"
@@ -4247,11 +4167,10 @@ class PianoMacroApp(tk.Tk):
             pass
 
     def _on_destroy_drag_drop(self, _event: object = None) -> None:
-        old = getattr(self, "_drag_drop_wndproc_old", None)
-        if old:
+        if hasattr(self, "_drag_drop_wndproc_old") and self._drag_drop_wndproc_old:
             try:
                 hwnd = ctypes.windll.user32.GetParent(self.winfo_id())
-                ctypes.windll.user32.SetWindowLongPtrW(hwnd, -4, old)
+                ctypes.windll.user32.SetWindowLongPtrW(hwnd, -4, self._drag_drop_wndproc_old)
             except Exception:
                 pass
 
@@ -4312,321 +4231,113 @@ class PianoMacroApp(tk.Tk):
         if hasattr(self, "library_search_entry"):
             self.library_search_entry.focus_set()
 
-    def _init_synth(self) -> None:
-        try:
-            self.synth = MidiSynth()
-            if self.synth._handle is not None:
-                prog = MIDI_INSTRUMENTS.get(self.synth_instrument.get(), 0)
-                self.synth.program_change(prog)
-                self.status.set("MIDI synth ready. Use sidebar to change instrument.")
-        except Exception:
-            self.synth = None
-        self._apply_dark_titlebar()
-
-    def _apply_dark_titlebar(self) -> None:
-        """Set Windows 10/11 title bar to dark mode via DWM API."""
-        if not sys.platform.startswith("win"):
-            return
-        try:
-            DWMWA_USE_IMMERSIVE_DARK_MODE = 20
-            hwnd = ctypes.windll.user32.GetParent(self.winfo_id())
-            value = ctypes.c_int(1)
-            ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE,
-                ctypes.byref(value), ctypes.sizeof(value)
-            )
-        except Exception:
-            pass
-
-    def _on_synth_toggle(self) -> None:
-        if not self.synth and self.synth_enabled.get():
-            self._init_synth()
-
-    def _on_instrument_change(self, _event: object = None) -> None:
-        if self.synth and self.synth._handle is not None:
-            prog = MIDI_INSTRUMENTS.get(self.synth_instrument.get(), 0)
-            self.synth.program_change(prog)
-            self.status.set(f"Instrument: {self.synth_instrument.get()}")
-
-    def _synth_note_on(self, midi_note: int, velocity: int = 100, synth_on: bool = True, synth_vol: int = 100) -> None:
-        if self.synth and synth_on and self.synth._handle:
-            vol = max(1, min(127, synth_vol))
-            vol = max(1, min(127, int(vol * velocity / 100)))
-            self.synth.note_on(midi_note, vol)
-
-    def _synth_note_off(self, midi_note: int, synth_on: bool = True) -> None:
-        if self.synth and synth_on and self.synth._handle:
-            self.synth.note_off(midi_note)
-
-    def _metronome_tick(self) -> None:
-        if not hasattr(self, "keyboard_canvas"):
-            return
-        c = getattr(self, "_c", {"field": UI_FIELD})
-        self.metronome_active = not self.metronome_active
-        canvas = self.keyboard_canvas
-        if self.metronome_active and hasattr(self, "_metro_rect"):
-            canvas.itemconfigure(self._metro_rect, fill="#ff6b35")
-            self.after(80, lambda: canvas.itemconfigure(self._metro_rect, fill=c["field"]))
-
-    def _draw_metronome_indicator(self) -> None:
-        if not hasattr(self, "keyboard_canvas"):
-            return
-        canvas = self.keyboard_canvas
-        w = canvas.winfo_width()
-        c = getattr(self, "_c", {"field": UI_FIELD, "accent": UI_ACCENT})
-        self._metro_rect = canvas.create_rectangle(
-            w - 24, 4, w - 4, 20,
-            fill=c["field"], outline=c["accent"], tags="metro",
-        )
-
-    def _highlight_scale(self) -> None:
-        root_name = self.scale_root.get()
-        if root_name == "None":
-            self.scale_highlighted.clear()
-            self.draw_keyboard_preview()
-            return
-        try:
-            root_midi = note_name_to_midi(root_name) % 12
-        except Exception:
-            return
-        mode = self.scale_mode_var.get()
-        interval_map = {
-            "major": [0, 2, 4, 5, 7, 9, 11],
-            "minor": [0, 2, 3, 5, 7, 8, 10],
-            "harmonic minor": [0, 2, 3, 5, 7, 8, 11],
-            "melodic minor": [0, 2, 3, 5, 7, 9, 11],
-            "pentatonic major": [0, 2, 4, 7, 9],
-            "pentatonic minor": [0, 3, 5, 7, 10],
-            "blues": [0, 3, 5, 6, 7, 10],
-            "chromatic": list(range(12)),
-        }
-        intervals = interval_map.get(mode, [0, 2, 4, 5, 7, 9, 11])
-        pitches = {(root_midi + i) % 12 for i in intervals}
-        self.scale_highlighted = {midi for midi in KEY_MAP if midi % 12 in pitches}
-        self.draw_keyboard_preview()
-
-    @staticmethod
-    def _detect_chord_name(midi_notes: list[int]) -> str:
-        if len(midi_notes) < 2:
-            return ""
-        pcs = sorted(set(n % 12 for n in midi_notes))
-        if len(pcs) < 2:
-            return ""
-        intervals_set = {(p - pcs[0]) % 12 for p in pcs}
-        templates = {
-            "maj": {0, 4, 7}, "m": {0, 3, 7}, "dim": {0, 3, 6}, "aug": {0, 4, 8},
-            "sus2": {0, 2, 7}, "sus4": {0, 5, 7},
-            "maj7": {0, 4, 7, 11}, "m7": {0, 3, 7, 10}, "7": {0, 4, 7, 10},
-            "dim7": {0, 3, 6, 9}, "m7b5": {0, 3, 6, 10}, "m(maj7)": {0, 3, 7, 11},
-            "maj9": {0, 4, 7, 11, 2}, "m9": {0, 3, 7, 10, 2}, "9": {0, 4, 7, 10, 2},
-            "6": {0, 4, 7, 9}, "m6": {0, 3, 7, 9},
-        }
-        best, best_score = "", 0
-        for name, tpl in templates.items():
-            if tpl.issubset(intervals_set) and len(tpl) > best_score:
-                best_score, best = len(tpl), name
-        if best and pcs:
-            return f"{['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'][pcs[0]]}{best}"
-        return ""
-
-    def _auto_save_tick(self) -> None:
-        if self._is_dirty and getattr(self, "current_song_id", None):
-            try:
-                self.save_current_song()
-                self.status.set("Auto-saved.")
-            except Exception:
-                pass
-        self._auto_save_timer = self.after(120000, self._auto_save_tick)
-
-    def _find_in_editor(self) -> None:
-        if not hasattr(self, "score_text"):
-            return
-        dialog = tk.Toplevel(self)
-        dialog.title("Find in Editor")
-        dialog.geometry("380x120")
-        dialog.configure(bg=getattr(self, "_active_bg", UI_BG))
-        dialog.transient(self)
-        dialog.resizable(False, False)
-        find_var = tk.StringVar()
-        frame = ttk.Frame(dialog, padding=16)
-        frame.pack(fill=tk.BOTH, expand=True)
-        ttk.Label(frame, text="Find:").grid(row=0, column=0, sticky="w", padx=(0, 8))
-        entry = ttk.Entry(frame, textvariable=find_var, width=30)
-        entry.grid(row=0, column=1, sticky="ew", padx=(0, 8))
-        entry.focus_set()
-
-        def do_find() -> None:
-            query = find_var.get()
-            if not query:
-                return
-            content = self.score_text.get("1.0", tk.END)
-            start = self.score_text.search(query, "insert", tk.END, nocase=True)
-            if start:
-                self.score_text.tag_remove("find_highlight", "1.0", tk.END)
-                self.score_text.tag_configure("find_highlight", background="#365880")
-                end = f"{start}+{len(query)}c"
-                self.score_text.tag_add("find_highlight", start, end)
-                self.score_text.mark_set("insert", end)
-                self.score_text.see(start)
-            else:
-                self.score_text.tag_remove("find_highlight", "1.0", tk.END)
-                self.status.set(f"Not found: {query}")
-
-        def find_next() -> None:
-            query = find_var.get()
-            if not query:
-                return
-            start = self.score_text.search(query, "insert", tk.END, nocase=True)
-            if start:
-                self.score_text.tag_remove("find_highlight", "1.0", tk.END)
-                self.score_text.tag_configure("find_highlight", background="#365880")
-                end = f"{start}+{len(query)}c"
-                self.score_text.tag_add("find_highlight", start, end)
-                self.score_text.mark_set("insert", end)
-                self.score_text.see(start)
-
-        entry.bind("<Return>", lambda _e: do_find())
-        entry.bind("<Control-g>", lambda _e: find_next())
-        btn_frame = ttk.Frame(frame)
-        btn_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(12, 0))
-        ttk.Button(btn_frame, text="Find", command=do_find, style="Accent.TButton").pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(btn_frame, text="Next", command=find_next).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(btn_frame, text="Close", command=dialog.destroy).pack(side=tk.LEFT)
-
-    def _show_shortcuts(self) -> None:
-        text = (
-            "Keyboard Shortcuts:\n\n"
-            "Ctrl+S          Save song\n"
-            "Ctrl+N          New song\n"
-            "Ctrl+O          Load MIDI file\n"
-            "Ctrl+F          Focus library search\n"
-            "Ctrl+G          Find in text editor\n"
-            "Ctrl+Shift+F    Toggle favorite\n"
-            "Ctrl+Shift+V    Paste from clipboard\n"
-            "Ctrl+Shift+E    Export as plain text\n"
-            "F1              Show this help\n"
-            "F6              Play (customizable)\n"
-            "F7              Pause/Resume (customizable)\n"
-            "F8              Stop (customizable)\n\n"
-            "Double-click library entry to load.\n"
-            "Right-click library entry for menu\n"
-            "  (Load, Duplicate, Queue, Star, Export, Delete).\n"
-            "Drop .mid/.wav/.mp3 files onto the window.\n"
-            "Drop .jjspiano.json files to import.\n"
-            "Tap Tempo button: click 3+ times to set BPM.\n"
-            "Loop: enable and set start/end in sidebar."
-        )
-        messagebox.showinfo("Keyboard Shortcuts", text)
-
     def _configure_theme(self) -> None:
         self._is_dark_theme = getattr(self, "_is_dark_theme", True)
         if self._is_dark_theme:
-            self._c = {
-                "bg": "#0a0e14", "surface": "#12171f", "surface2": "#181e28",
-                "field": "#0d1119", "border": "#1e2a3a", "accent": "#58a6ff",
-                "accent2": "#1f6feb", "accent_text": "#ffffff",
-                "text": "#c9d1d9", "muted": "#6e7681", "danger": "#f85149",
-                "danger2": "#da3633", "selection": "#1f3a5f",
-                "header_bg": "#0d1117", "header_border": "#21262d",
-                "kw": "#e3e8ed", "kb": "#161b22", "kwa": "#79c0ff", "kba": "#58a6ff",
-                "ko": "#30363d", "success": "#3fb950", "warning": "#d29922",
-            }
+            bg, surface, surface_hover, field, border = UI_BG, UI_SURFACE, UI_SURFACE_HOVER, UI_FIELD, UI_BORDER
+            text, muted, accent, accent_dark, accent_text = UI_TEXT, UI_MUTED, UI_ACCENT, UI_ACCENT_DARK, UI_ACCENT_TEXT
+            danger, danger_dark, selection = UI_DANGER, UI_DANGER_DARK, UI_SELECTION
         else:
-            self._c = {
-                "bg": "#f6f8fa", "surface": "#ffffff", "surface2": "#f0f2f5",
-                "field": "#ffffff", "border": "#d0d7de", "accent": "#0969da",
-                "accent2": "#0550ae", "accent_text": "#ffffff",
-                "text": "#1f2328", "muted": "#656d76", "danger": "#cf222e",
-                "danger2": "#a40e26", "selection": "#ddf4ff",
-                "header_bg": "#24292f", "header_border": "#3a3f47",
-                "kw": "#f6f8fa", "kb": "#1f2328", "kwa": "#54aeff", "kba": "#0969da",
-                "ko": "#d0d7de", "success": "#1a7f37", "warning": "#9a6700",
-            }
-        c = self._c
+            bg, surface, surface_hover = "#f0f2f5", "#ffffff", "#e4e6eb"
+            field, border = "#ffffff", "#ccd0d5"
+            text, muted = "#1c1e21", "#606770"
+            accent, accent_dark, accent_text = "#1877f2", "#166fe5", "#ffffff"
+            danger, danger_dark, selection = "#e41e3f", "#c41a34", "#d2e3fc"
 
-        self.configure(bg=c["bg"])
+        self.configure(bg=bg)
         self.option_add("*Font", UI_FONT)
-        self.option_add("*Menu.background", c["surface"])
-        self.option_add("*Menu.foreground", c["text"])
+        self.option_add("*Menu.background", surface)
+        self.option_add("*Menu.foreground", text)
+        self.option_add("*Menu.activeBackground", surface_hover)
+        self.option_add("*Menu.activeForeground", text)
 
         self.style = ttk.Style(self)
         try:
             self.style.theme_use("clam")
         except tk.TclError:
             pass
-        s = self.style
 
-        s.configure(".", background=c["bg"], foreground=c["text"], font=UI_FONT)
-        s.configure("TFrame", background=c["bg"])
-        s.configure("Surface.TFrame", background=c["surface"])
-        s.configure("TLabel", background=c["bg"], foreground=c["text"])
-        s.configure("Title.TLabel", font=("{Segoe UI}", 18, "bold"), foreground=c["text"], background=c["bg"])
-        s.configure("Section.TLabel", font=("{Segoe UI}", 10, "bold"), foreground=c["text"], background=c["bg"])
-        s.configure("Muted.TLabel", foreground=c["muted"], background=c["bg"])
-        s.configure("Status.TLabel", foreground=c["accent"], background=c["bg"])
-        s.configure("Header.TLabel", foreground="#ffffff", background=c["header_bg"], font=("{Segoe UI}", 18, "bold"))
+        style = self.style
+        style.configure(".", background=bg, foreground=text, font=UI_FONT)
+        style.configure("TFrame", background=bg)
+        style.configure("TLabel", background=bg, foreground=text)
+        style.configure("Title.TLabel", background=bg, foreground=text, font=UI_TITLE_FONT)
+        style.configure("Section.TLabel", background=bg, foreground=text, font=UI_SECTION_FONT)
+        style.configure("Muted.TLabel", background=bg, foreground=muted)
+        style.configure("Status.TLabel", background=bg, foreground=accent)
 
-        btn = {"background": c["surface"], "foreground": c["text"], "bordercolor": c["border"],
-               "lightcolor": c["surface"], "darkcolor": c["surface"], "focuscolor": c["accent"],
-               "padding": (12, 6), "relief": tk.FLAT, "font": ("{Segoe UI}", 9)}
-        s.configure("TButton", **btn)
-        s.map("TButton", background=[("pressed", c["field"]), ("active", c["surface2"])],
-               foreground=[("disabled", c["muted"]), ("active", c["text"])],
-               bordercolor=[("focus", c["accent"]), ("active", c["accent"])])
+        button_options = {
+            "background": surface,
+            "foreground": text,
+            "bordercolor": border,
+            "lightcolor": surface,
+            "darkcolor": surface,
+            "focuscolor": accent,
+            "padding": (11, 7),
+            "relief": tk.FLAT,
+        }
+        style.configure("TButton", **button_options)
+        style.map("TButton", background=[("pressed", field), ("active", surface_hover)],
+                   foreground=[("disabled", muted), ("active", text)],
+                   bordercolor=[("focus", accent), ("active", accent)])
 
-        s.configure("Accent.TButton", background=c["accent"], foreground=c["accent_text"],
-                     bordercolor=c["accent"], lightcolor=c["accent"], darkcolor=c["accent2"],
-                     focuscolor=c["accent"], padding=(14, 7), relief=tk.FLAT, font=("{Segoe UI}", 9, "bold"))
-        s.map("Accent.TButton", background=[("pressed", c["accent2"]), ("active", c["accent"])])
+        style.configure("Accent.TButton", background=accent, foreground=accent_text,
+                         bordercolor=accent, lightcolor=accent, darkcolor=accent_dark,
+                         focuscolor=accent, padding=(12, 7), relief=tk.FLAT)
+        style.map("Accent.TButton", background=[("pressed", accent_dark), ("active", accent)],
+                   foreground=[("disabled", muted), ("active", accent_text)])
 
-        s.configure("Danger.TButton", background=c["danger2"], foreground="#ffffff",
-                     bordercolor=c["danger"], lightcolor=c["danger2"], darkcolor=c["danger2"],
-                     focuscolor=c["danger"], padding=(12, 6), relief=tk.FLAT)
-        s.map("Danger.TButton", background=[("pressed", c["danger2"]), ("active", c["danger"])])
+        style.configure("Danger.TButton", background=danger_dark, foreground=text,
+                         bordercolor=danger, lightcolor=danger_dark, darkcolor=danger_dark,
+                         focuscolor=danger, padding=(11, 7), relief=tk.FLAT)
+        style.map("Danger.TButton", background=[("pressed", danger_dark), ("active", danger)],
+                   foreground=[("disabled", muted), ("active", text)])
 
-        s.configure("Icon.TButton", background=c["bg"], foreground=c["text"], bordercolor=c["border"],
-                     lightcolor=c["bg"], darkcolor=c["bg"], focuscolor=c["accent"], padding=(8, 5), relief=tk.FLAT)
-        s.map("Icon.TButton", background=[("pressed", c["field"]), ("active", c["surface2"])])
-
+        field_options = {"fieldbackground": field, "background": field, "foreground": text,
+                         "bordercolor": border, "lightcolor": field, "darkcolor": field, "padding": 5}
         for sn in ("TEntry", "TSpinbox", "TCombobox"):
-            s.configure(sn, fieldbackground=c["field"], background=c["field"], foreground=c["text"],
-                        bordercolor=c["border"], lightcolor=c["field"], darkcolor=c["field"], padding=6)
-            s.map(sn, fieldbackground=[("readonly", c["field"]), ("focus", c["field"])],
-                  foreground=[("readonly", c["text"]), ("disabled", c["muted"])],
-                  bordercolor=[("focus", c["accent"]), ("active", c["accent"])])
+            style.configure(sn, **field_options)
+            style.map(sn, fieldbackground=[("readonly", field), ("focus", field)],
+                      background=[("readonly", field), ("focus", field)],
+                      foreground=[("readonly", text), ("disabled", muted)],
+                      bordercolor=[("focus", accent), ("active", accent)])
+        style.configure("TCombobox", arrowcolor=muted, arrowsize=14)
+        style.map("TCombobox", arrowcolor=[("active", accent), ("pressed", accent)])
 
-        s.configure("TCheckbutton", background=c["bg"], foreground=c["text"], focuscolor=c["accent"], padding=(0, 3))
-        s.map("TCheckbutton", foreground=[("disabled", c["muted"])])
-        s.configure("Horizontal.TProgressbar", troughcolor=c["field"], background=c["accent"], bordercolor=c["border"], thickness=8)
-        s.configure("TSeparator", background=c["border"])
-        s.configure("TPanedwindow", background=c["bg"], sashwidth=3)
-        s.configure("TScrollbar", background=c["surface"], troughcolor=c["field"], bordercolor=c["bg"], arrowcolor=c["muted"], width=10)
-        s.map("TScrollbar", background=[("active", c["surface2"])], arrowcolor=[("active", c["text"])])
-        s.configure("Horizontal.TScale", background=c["bg"], troughcolor=c["field"], bordercolor=c["border"])
+        style.configure("TCheckbutton", background=bg, foreground=text, focuscolor=accent, padding=(0, 3))
+        style.map("TCheckbutton", foreground=[("disabled", muted), ("active", text)], background=[("active", bg)])
 
-        s.configure("Treeview", background=c["field"], foreground=c["text"], fieldbackground=c["field"],
-                     bordercolor=c["border"], rowheight=28)
-        s.configure("Treeview.Heading", background=c["surface"], foreground=c["text"], bordercolor=c["border"],
-                     font=("{Segoe UI}", 9, "bold"), padding=(8, 6))
-        s.map("Treeview", background=[("selected", c["selection"])], foreground=[("selected", c["text"])])
+        style.configure("Horizontal.TProgressbar", troughcolor=field, background=accent, bordercolor=border)
+        style.configure("TSeparator", background=border)
+        style.configure("TPanedwindow", background=bg)
+        style.configure("TScrollbar", background=surface, troughcolor=field, bordercolor=bg, arrowcolor=muted)
+        style.map("TScrollbar", background=[("active", surface_hover)], arrowcolor=[("active", text)])
+        style.configure("Horizontal.TScale", background=bg, troughcolor=field, bordercolor=border)
 
-        s.configure("TNotebook", background=c["bg"], bordercolor=c["border"], tabmargins=(2, 2, 2, 0))
-        s.configure("TNotebook.Tab", background=c["surface"], foreground=c["text"], bordercolor=c["border"], padding=(14, 6))
-        s.map("TNotebook.Tab", background=[("selected", c["field"])], foreground=[("selected", c["accent"])])
+        tree_opts = {"background": field, "foreground": text, "fieldbackground": field,
+                     "bordercolor": border, "rowheight": 27}
+        style.configure("Treeview", **tree_opts)
+        style.configure("Treeview.Heading", background=surface, foreground=text, bordercolor=border,
+                        font=UI_SECTION_FONT, padding=(6, 6))
+        style.map("Treeview", background=[("selected", accent_dark)], foreground=[("selected", text)])
 
-        self._active_bg = c["bg"]
-        self._active_fg = c["text"]
-        self._active_field = c["field"]
-        self._active_accent = c["accent"]
-        self._active_selection = c["selection"]
-        self._active_border = c["border"]
-        self._active_kw = c["kw"]
-        self._active_kb = c["kb"]
-        self._active_kwa = c["kwa"]
-        self._active_kba = c["kba"]
-        self._active_ko = c["ko"]
-        self._active_surface = c["surface"]
-        self._active_muted = c["muted"]
+        style.configure("TNotebook", background=bg, bordercolor=border, tabmargins=(2, 2, 2, 0))
+        style.configure("TNotebook.Tab", background=surface, foreground=text, bordercolor=border,
+                        padding=(12, 5), font=UI_FONT)
+        style.map("TNotebook.Tab", background=[("selected", field), ("active", surface_hover)],
+                  foreground=[("selected", accent), ("active", text)])
+
+        self._active_bg = bg
+        self._active_fg = text
+        self._active_field = field
+        self._active_accent = accent
+        self._active_selection = selection
+        self._active_border = border
+        self._active_key_white = "#f5f6f7" if not self._is_dark_theme else UI_KEY_WHITE
+        self._active_key_white_active = "#54c8ff" if not self._is_dark_theme else UI_KEY_WHITE_ACTIVE
+        self._active_key_black = "#1c1e21" if not self._is_dark_theme else UI_KEY_BLACK
+        self._active_key_black_active = "#1877f2" if not self._is_dark_theme else UI_KEY_BLACK_ACTIVE
+        self._active_key_outline = "#ccd0d5" if not self._is_dark_theme else UI_KEY_OUTLINE
 
     def toggle_theme(self) -> None:
         self._is_dark_theme = not getattr(self, "_is_dark_theme", True)
@@ -4640,24 +4351,34 @@ class PianoMacroApp(tk.Tk):
         self.status.set(f"Theme: {'Dark' if self._is_dark_theme else 'Light'}")
 
     def _style_text_widget(self, widget: tk.Text) -> None:
-        c = getattr(self, "_c", {"field": UI_FIELD, "text": UI_TEXT, "accent": UI_ACCENT,
-                                  "selection": UI_SELECTION, "border": UI_BORDER})
         widget.configure(
-            bg=c["field"], fg=c["text"], insertbackground=c["accent"],
-            selectbackground=c["selection"], selectforeground=c["text"],
-            relief=tk.FLAT, borderwidth=0, highlightthickness=1,
-            highlightbackground=c["border"], highlightcolor=c["accent"],
-            padx=10, pady=10,
+            bg=getattr(self, "_active_field", UI_FIELD),
+            fg=getattr(self, "_active_fg", UI_TEXT),
+            insertbackground=getattr(self, "_active_accent", UI_ACCENT),
+            selectbackground=getattr(self, "_active_selection", UI_SELECTION),
+            selectforeground=getattr(self, "_active_fg", UI_TEXT),
+            relief=tk.FLAT,
+            borderwidth=0,
+            highlightthickness=1,
+            highlightbackground=getattr(self, "_active_border", UI_BORDER),
+            highlightcolor=getattr(self, "_active_accent", UI_ACCENT),
+            padx=10,
+            pady=10,
         )
 
     def _style_listbox(self, widget: tk.Listbox) -> None:
-        c = getattr(self, "_c", {"field": UI_FIELD, "text": UI_TEXT, "accent": UI_ACCENT,
-                                  "border": UI_BORDER, "selection": UI_ACCENT_DARK})
         widget.configure(
-            bg=c["field"], fg=c["text"], selectbackground=c["selection"],
-            selectforeground=c["text"], activestyle="none", relief=tk.FLAT,
-            borderwidth=0, highlightthickness=1, highlightbackground=c["border"],
-            highlightcolor=c["accent"], font=("Segoe UI", 10),
+            bg=getattr(self, "_active_field", UI_FIELD),
+            fg=getattr(self, "_active_fg", UI_TEXT),
+            selectbackground=UI_ACCENT_DARK,
+            selectforeground=UI_TEXT,
+            activestyle="none",
+            relief=tk.FLAT,
+            borderwidth=0,
+            highlightthickness=1,
+            highlightbackground=getattr(self, "_active_border", UI_BORDER),
+            highlightcolor=getattr(self, "_active_accent", UI_ACCENT),
+            font=("Segoe UI", 10),
         )
 
     @staticmethod
@@ -4710,68 +4431,67 @@ class PianoMacroApp(tk.Tk):
             self._bind_mousewheel_to_canvas(child, canvas)
 
     def _build_ui(self) -> None:
-        c = getattr(self, "_c", {"bg": UI_BG, "surface": UI_SURFACE, "header_bg": "#0d1117",
-                                  "header_border": "#21262d", "text": UI_TEXT, "accent": UI_ACCENT,
-                                  "muted": UI_MUTED, "danger": UI_DANGER, "field": UI_FIELD,
-                                  "border": UI_BORDER})
-        root = ttk.Frame(self)
+        root = ttk.Frame(self, padding=16)
         root.pack(fill=tk.BOTH, expand=True)
         root.columnconfigure(0, weight=1)
         root.rowconfigure(2, weight=1)
 
-        # ── Header bar ──
-        header = tk.Canvas(root, height=56, bg=c["header_bg"], highlightthickness=0)
-        header.grid(row=0, column=0, sticky="ew")
-        header.create_text(18, 28, text="\u266b", fill=c["accent"], font=("Segoe UI", 22), anchor="w")
-        header.create_text(52, 29, text=APP_TITLE, fill="#ffffff", font=("{Segoe UI}", 15, "bold"), anchor="w")
-        sep = tk.Frame(root, height=1, bg=c["header_border"])
-        sep.grid(row=0, column=0, sticky="ew")
-        sep.lift()
+        title_row = ttk.Frame(root)
+        title_row.grid(row=0, column=0, sticky="ew")
+        title_row.columnconfigure(0, weight=1)
+        ttk.Label(title_row, text=APP_TITLE, style="Title.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(title_row, textvariable=self.status, style="Status.TLabel").grid(
+            row=1, column=0, sticky="w", pady=(3, 0)
+        )
 
-        # ── Control bar ──
-        control_bar = ttk.Frame(root, padding=(12, 10, 12, 6))
-        control_bar.grid(row=1, column=0, sticky="ew")
-        for i in range(14):
-            control_bar.columnconfigure(i, weight=0)
+        control_bar = ttk.Frame(root)
+        control_bar.grid(row=1, column=0, sticky="ew", pady=(12, 8))
+        for column in range(14):
+            control_bar.columnconfigure(column, weight=0)
         control_bar.columnconfigure(13, weight=1)
 
-        icons = {"Play": "\u25b6", "Preview": "\u25b7", "Pause": "\u23f8", "Stop": "\u23f9",
-                 "Load MIDI": "\ud83d\udcc2", "Audio": "\ud83c\udfb5", "Search": "\ud83d\udd0d",
-                 "Record": "\u23fa"}
-        btns = [
-            ("Play", self.start_playback, "Accent.TButton", "Send keystrokes to Roblox (F6)"),
-            ("Preview", self.start_preview_playback, "TButton", "Keyboard highlight only, no keystrokes"),
-            ("Pause", self.toggle_pause, "TButton", "Pause/resume (F7)"),
-            ("Stop", self.stop_playback, "Danger.TButton", "Stop immediately (F8)"),
-            ("Load MIDI", self.load_midi, "TButton", "Import .mid file (Ctrl+O)"),
-            ("Audio", self.open_audio_to_midi_tool, "TButton", "Convert audio to MIDI with AI"),
-            ("Search", self.open_online_midi_search_tool, "TButton", "Search Online Sequencer"),
-            ("Record", self.toggle_recording, "TButton", "Record keystrokes as score"),
-        ]
-        for idx, (label, cmd, style, tip) in enumerate(btns):
-            icon = icons.get(label, "")
-            btn = ttk.Button(control_bar, text=f"{icon}  {label}", command=cmd, style=style)
-            btn.grid(row=0, column=idx, padx=(0, 4))
-            self._add_tooltip(btn, tip)
-            if label == "Load MIDI":
-                btn.bind("<Button-3>", self._show_recent_midi_menu)
-            if label == "Record":
-                self.record_btn = btn
+        play_btn = ttk.Button(control_bar, text="Play", command=self.start_playback, style="Accent.TButton")
+        play_btn.grid(row=0, column=0, padx=(0, 6))
+        self._add_tooltip(play_btn, "Send keystrokes to Roblox (F6)")
 
-        nfo = ttk.Label(control_bar, textvariable=self.loaded_midi_name, style="Muted.TLabel")
-        nfo.grid(row=0, column=8, columnspan=6, sticky="e")
+        preview_btn = ttk.Button(control_bar, text="Preview", command=self.start_preview_playback)
+        preview_btn.grid(row=0, column=1, padx=6)
+        self._add_tooltip(preview_btn, "Play with keyboard highlight only, no keystrokes")
 
-        # ── Main paned area ──
+        pause_btn = ttk.Button(control_bar, text="Pause", command=self.toggle_pause)
+        pause_btn.grid(row=0, column=2, padx=6)
+        self._add_tooltip(pause_btn, "Pause/resume playback (F7)")
+
+        stop_btn = ttk.Button(control_bar, text="Stop", command=self.stop_playback, style="Danger.TButton")
+        stop_btn.grid(row=0, column=3, padx=6)
+        self._add_tooltip(stop_btn, "Stop playback immediately (F8)")
+
+        midi_btn = ttk.Button(control_bar, text="Load MIDI", command=self.load_midi)
+        midi_btn.grid(row=0, column=4, padx=6)
+        self._add_tooltip(midi_btn, "Import a .mid file (Ctrl+O)")
+
+        audio_btn = ttk.Button(control_bar, text="Audio to MIDI", command=self.open_audio_to_midi_tool)
+        audio_btn.grid(row=0, column=5, padx=6)
+        self._add_tooltip(audio_btn, "Convert WAV/MP3/FLAC to MIDI with AI")
+
+        search_btn = ttk.Button(control_bar, text="Online Search", command=self.open_online_midi_search_tool)
+        search_btn.grid(row=0, column=6, padx=6)
+        self._add_tooltip(search_btn, "Search & download from Online Sequencer")
+
+        ttk.Label(control_bar, textvariable=self.loaded_midi_name, style="Muted.TLabel").grid(
+            row=0, column=7, columnspan=7, sticky="e"
+        )
+
         paned = ttk.Panedwindow(root, orient=tk.HORIZONTAL)
         paned.grid(row=2, column=0, sticky="nsew")
 
-        library_frame = ttk.Frame(paned, padding=(12, 8, 6, 8))
+        library_frame = ttk.Frame(paned, padding=(0, 8, 14, 0))
         library_frame.columnconfigure(0, weight=1)
         library_frame.rowconfigure(1, weight=1)
         self._build_library_panel(library_frame)
         paned.add(library_frame, weight=1)
 
-        editor_frame = ttk.Frame(paned, padding=(6, 8, 6, 8))
+        editor_frame = ttk.Frame(paned, padding=(0, 8, 14, 0))
         editor_frame.columnconfigure(0, weight=1)
         editor_frame.rowconfigure(2, weight=1)
         paned.add(editor_frame, weight=3)
@@ -4797,7 +4517,6 @@ class PianoMacroApp(tk.Tk):
         ttk.Label(editor_actions, text="Song text", style="Section.TLabel").pack(side=tk.LEFT)
         ttk.Button(editor_actions, text="Analyze", command=self.analyze_current_source).pack(side=tk.RIGHT, padx=(6, 0))
         ttk.Button(editor_actions, text="Timeline", command=self.open_timeline_editor).pack(side=tk.RIGHT, padx=(6, 0))
-        ttk.Button(editor_actions, text="Piano Roll", command=self.open_piano_roll_editor).pack(side=tk.RIGHT, padx=(6, 0))
         ttk.Button(editor_actions, text="Auto Cleanup MIDI", command=self.cleanup_loaded_midi_playability).pack(
             side=tk.RIGHT, padx=(6, 0)
         )
@@ -4807,19 +4526,10 @@ class PianoMacroApp(tk.Tk):
         ttk.Button(editor_actions, text="Save Song", command=self.save_current_song, style="Accent.TButton").pack(
             side=tk.RIGHT, padx=(6, 0)
         )
-        self.queue_status = tk.StringVar(value="")
-        ttk.Label(editor_actions, textvariable=self.queue_status, style="Muted.TLabel").pack(
-            side=tk.RIGHT, padx=(12, 0)
-        )
 
         self.score_text = tk.Text(editor_frame, wrap=tk.WORD, undo=True, font=("Consolas", 11))
         self.score_text.grid(row=2, column=0, sticky="nsew", pady=(4, 0))
         self._style_text_widget(self.score_text)
-        self._line_numbers = tk.Canvas(editor_frame, width=44, bg=c["field"], highlightthickness=0)
-        self._line_numbers.place(in_=self.score_text, relx=0, rely=0, relheight=1, x=0, y=0, anchor="nw")
-        self.score_text.bind("<KeyRelease>", self._update_line_numbers)
-        self.score_text.bind("<MouseWheel>", self._update_line_numbers)
-        self.score_text.bind("<<Modified>>", lambda e: (self._on_text_modified(e), self._update_line_numbers()))
         self.score_text.insert(
             "1.0",
             "C4 D4 E4 F4 G4 A4 B4 C5\n"
@@ -4832,29 +4542,20 @@ class PianoMacroApp(tk.Tk):
         keyboard_frame.columnconfigure(0, weight=1)
         ttk.Label(keyboard_frame, text="Preview keyboard", style="Section.TLabel").grid(row=0, column=0, sticky="w")
         self.keyboard_canvas = tk.Canvas(
-            keyboard_frame, height=132, bg=c["field"],
-            highlightthickness=1, highlightbackground=c["border"], highlightcolor=c["accent"],
+            keyboard_frame,
+            height=132,
+            bg=getattr(self, "_active_field", UI_FIELD),
+            highlightthickness=1,
+            highlightbackground=getattr(self, "_active_border", UI_BORDER),
+            highlightcolor=getattr(self, "_active_accent", UI_ACCENT),
         )
         self.keyboard_canvas.grid(row=1, column=0, sticky="ew", pady=(6, 0))
         self.keyboard_canvas.bind("<Configure>", lambda _event: self.draw_keyboard_preview())
 
-        scale_row = ttk.Frame(editor_frame)
-        scale_row.grid(row=4, column=0, sticky="ew", pady=(6, 0))
-        ttk.Label(scale_row, text="Scale:").pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Combobox(scale_row, textvariable=self.scale_root, width=8, state="readonly",
-                     values=["None"] + [midi_to_note_name(n) for n in range(note_name_to_midi("C2"), note_name_to_midi("C5") + 1) if "#" not in midi_to_note_name(n)]
-                     ).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Combobox(scale_row, textvariable=self.scale_mode_var, width=8, state="readonly",
-                     values=["major", "minor", "harmonic minor", "melodic minor", "pentatonic major", "pentatonic minor", "blues", "chromatic"]
-                     ).pack(side=tk.LEFT)
-        ttk.Button(scale_row, text="Highlight", command=self._highlight_scale).pack(side=tk.LEFT, padx=(6, 0))
-        self.scale_root.trace_add("write", lambda *_: self._highlight_scale())
-        self.scale_mode_var.trace_add("write", lambda *_: self._highlight_scale())
-
         side_container = ttk.Frame(paned, padding=(14, 8, 0, 0))
         side_container.columnconfigure(0, weight=1)
         side_container.rowconfigure(0, weight=1)
-        side_canvas = tk.Canvas(side_container, bg=c["bg"], highlightthickness=0, borderwidth=0)
+        side_canvas = tk.Canvas(side_container, bg=getattr(self, "_active_bg", UI_BG), highlightthickness=0, borderwidth=0)
         side_scrollbar = ttk.Scrollbar(side_container, orient=tk.VERTICAL, command=side_canvas.yview)
         side_canvas.configure(yscrollcommand=side_scrollbar.set)
         side_canvas.grid(row=0, column=0, sticky="nsew")
@@ -4870,10 +4571,6 @@ class PianoMacroApp(tk.Tk):
         ttk.Label(side, text="Playback", style="Section.TLabel").grid(row=row, column=0, columnspan=2, sticky="w")
         row += 1
         self._spin(side, row, "BPM", self.bpm, 20, 320, 1)
-        row += 1
-        ttk.Button(side, text="Tap Tempo", command=self._tap_tempo).grid(
-            row=row, column=0, columnspan=2, sticky="ew", pady=4
-        )
         row += 1
         self._spin(side, row, "Speed", self.speed, 0.25, 3.0, 0.05)
         row += 1
@@ -4918,52 +4615,6 @@ class PianoMacroApp(tk.Tk):
         ttk.Checkbutton(side, text="Preview only", variable=self.preview_only).grid(
             row=row, column=0, columnspan=2, sticky="w", pady=4
         )
-        row += 1
-
-        ttk.Checkbutton(side, text="Loop playback", variable=self.loop_enabled).grid(
-            row=row, column=0, columnspan=2, sticky="w", pady=4
-        )
-        row += 1
-        ttk.Checkbutton(side, text="Metronome", variable=self.metronome_enabled).grid(
-            row=row, column=0, columnspan=2, sticky="w", pady=4
-        )
-        row += 1
-        self._spin(side, row, "Loop start (sec)", self.loop_start_sec, 0, 3600, 0.5)
-        row += 1
-        self._spin(side, row, "Loop end (sec)", self.loop_end_sec, 0, 3600, 0.5)
-        row += 1
-
-        ttk.Checkbutton(side, text="MIDI Synth output", variable=self.synth_enabled,
-                         command=self._on_synth_toggle).grid(
-            row=row, column=0, columnspan=2, sticky="w", pady=4
-        )
-        row += 1
-        ttk.Label(side, text="Instrument").grid(row=row, column=0, sticky="w", pady=4)
-        inst_combo = ttk.Combobox(
-            side, textvariable=self.synth_instrument,
-            values=list(MIDI_INSTRUMENTS.keys()), state="readonly", width=22,
-        )
-        inst_combo.grid(row=row, column=1, sticky="ew", pady=4)
-        inst_combo.bind("<<ComboboxSelected>>", self._on_instrument_change)
-        row += 1
-        self._spin(side, row, "Synth volume", self.synth_volume, 10, 127, 5)
-        row += 1
-
-        ttk.Separator(side).grid(row=row, column=0, columnspan=2, sticky="ew", pady=12)
-        row += 1
-        ttk.Label(side, text="Practice Mode", style="Section.TLabel").grid(row=row, column=0, columnspan=2, sticky="w")
-        row += 1
-        ttk.Checkbutton(side, text="Enable speed trainer", variable=self.practice_mode).grid(
-            row=row, column=0, columnspan=2, sticky="w", pady=4
-        )
-        row += 1
-        self._spin(side, row, "Start speed", self.practice_start_speed, 0.10, 1.0, 0.05)
-        row += 1
-        self._spin(side, row, "Target speed", self.practice_target_speed, 0.25, 3.0, 0.05)
-        row += 1
-        self._spin(side, row, "Speed increment", self.practice_increment, 0.01, 0.25, 0.01)
-        row += 1
-        self._spin(side, row, "Loops per step", self.practice_loops_per_step, 1, 10, 1)
         row += 1
 
         ttk.Separator(side).grid(row=row, column=0, columnspan=2, sticky="ew", pady=12)
@@ -5078,14 +4729,7 @@ class PianoMacroApp(tk.Tk):
         )
         row += 1
 
-        ttk.Progressbar(root, variable=self.progress, maximum=100).grid(row=3, column=0, sticky="ew", pady=(8, 0), padx=12)
-
-        status_bar = ttk.Frame(root)
-        status_bar.grid(row=4, column=0, sticky="ew", padx=12, pady=(4, 6))
-        status_bar.columnconfigure(0, weight=1)
-        ttk.Label(status_bar, textvariable=self.status, style="Status.TLabel").grid(row=0, column=0, sticky="w")
-        ttk.Label(status_bar, textvariable=self.queue_status, style="Muted.TLabel").grid(row=0, column=1, sticky="e", padx=(12, 0))
-
+        ttk.Progressbar(root, variable=self.progress, maximum=100).grid(row=3, column=0, sticky="ew", pady=(10, 0))
         self._bind_mousewheel_to_canvas(side_container, side_canvas)
 
     def _build_library_panel(self, parent: ttk.Frame) -> None:
@@ -5160,29 +4804,15 @@ class PianoMacroApp(tk.Tk):
         ttk.Button(parent, text="Delete Selected", command=self.delete_selected_song, style="Danger.TButton").grid(
             row=5, column=0, sticky="ew", pady=(6, 0)
         )
-        queue_grid = ttk.Frame(parent)
-        queue_grid.grid(row=6, column=0, sticky="ew", pady=(8, 0))
-        queue_grid.columnconfigure(0, weight=1)
-        queue_grid.columnconfigure(1, weight=1)
-        ttk.Button(queue_grid, text="Play Queue", command=self.play_queue, style="Accent.TButton").grid(
-            row=0, column=0, sticky="ew", padx=(0, 3)
-        )
-        ttk.Button(queue_grid, text="Clear Queue", command=self.clear_queue).grid(
-            row=0, column=1, sticky="ew", padx=(3, 0)
-        )
 
         self.recent_label = tk.StringVar(value="")
         ttk.Label(parent, textvariable=self.recent_label, wraplength=180, justify=tk.LEFT, style="Muted.TLabel").grid(
-            row=7, column=0, sticky="ew", pady=(8, 0)
+            row=6, column=0, sticky="ew", pady=(8, 0)
         )
 
         self.library_hint = tk.StringVar(value="")
         ttk.Label(parent, textvariable=self.library_hint, wraplength=180, justify=tk.LEFT, style="Muted.TLabel").grid(
-            row=8, column=0, sticky="ew", pady=(5, 0)
-        )
-        self.library_stats = tk.StringVar(value="")
-        ttk.Label(parent, textvariable=self.library_stats, wraplength=180, justify=tk.LEFT, style="Muted.TLabel").grid(
-            row=9, column=0, sticky="ew", pady=(2, 0)
+            row=7, column=0, sticky="ew", pady=(5, 0)
         )
         self.refresh_library_list()
         self._update_recent_label()
@@ -5192,85 +4822,97 @@ class PianoMacroApp(tk.Tk):
             return
         canvas: tk.Canvas = self.keyboard_canvas
         canvas.delete("all")
-        self.preview_items.clear(); self.preview_rects.clear()
-        self.preview_text.clear(); self.preview_is_black.clear()
+        self.preview_items.clear()
+        self.preview_rects.clear()
+        self.preview_text.clear()
+        self.preview_is_black.clear()
 
         width = max(600, canvas.winfo_width())
         height = max(110, canvas.winfo_height())
-        c = getattr(self, "_c", {"kw": UI_KEY_WHITE, "kwa": UI_KEY_WHITE_ACTIVE,
-                                  "kb": UI_KEY_BLACK, "kba": UI_KEY_BLACK_ACTIVE,
-                                  "ko": UI_KEY_OUTLINE, "muted": UI_MUTED, "field": UI_FIELD})
-        margin = 2
-        white_height = height - 28
-        black_height = int(white_height * 0.60)
-        white_width = (width - margin * 2) / len(WHITE_MIDI_NOTES)
-        white_positions = {midi_note: index for index, midi_note in enumerate(WHITE_MIDI_NOTES)}
-        dark = getattr(self, "_is_dark_theme", True)
+        white_height = height - 18
+        black_height = int(white_height * 0.62)
+        white_width = width / len(WHITE_MIDI_NOTES)
+        white_positions: dict[int, int] = {midi_note: index for index, midi_note in enumerate(WHITE_MIDI_NOTES)}
 
         for index, midi_note in enumerate(WHITE_MIDI_NOTES):
-            x0 = margin + index * white_width
-            x1 = margin + (index + 1) * white_width
-            in_scale = not self.scale_highlighted or midi_note in self.scale_highlighted
-            active = midi_note in self.preview_active_notes
-            if active:
-                fill = c["kwa"]
-            elif not in_scale:
-                fill = "#1e2229" if dark else "#d0d5d9"
-            else:
-                fill = c["kw"]
-            rect = canvas.create_rectangle(x0, 0, x1, white_height, fill=fill, outline=c["ko"], width=1)
+            x0 = index * white_width
+            x1 = (index + 1) * white_width
+            fill = getattr(self, "_active_key_white_active", UI_KEY_WHITE_ACTIVE) if midi_note in self.preview_active_notes else getattr(self, "_active_key_white", UI_KEY_WHITE)
+            rect = canvas.create_rectangle(x0, 0, x1, white_height, fill=fill, outline=getattr(self, "_active_key_outline", UI_KEY_OUTLINE))
             binding = KEY_MAP[midi_note]
-            canvas.create_text((x0+x1)/2, white_height-22, text=midi_to_note_name(midi_note),
-                              fill="#8899aa" if dark else "#667788", font=("Segoe UI", 7))
-            canvas.create_text((x0+x1)/2, white_height-7, text=binding.label,
-                              fill="#556677" if dark else "#445566", font=("Segoe UI", 8, "bold"))
+            note_text = canvas.create_text(
+                (x0 + x1) / 2,
+                white_height - 26,
+                text=midi_to_note_name(midi_note),
+                fill="#3b4550",
+                font=("Segoe UI", 7),
+            )
+            key_text = canvas.create_text(
+                (x0 + x1) / 2,
+                white_height - 10,
+                text=binding.label,
+                fill="#657180",
+                font=("Segoe UI", 8, "bold"),
+            )
+            self.preview_items[midi_note] = [rect, note_text, key_text]
             self.preview_rects[midi_note] = rect
+            self.preview_text[midi_note] = [note_text, key_text]
             self.preview_is_black[midi_note] = False
 
         for midi_note in BLACK_MIDI_NOTES:
-            prev = midi_note - 1
-            while prev not in white_positions and prev >= min(WHITE_MIDI_NOTES): prev -= 1
-            if prev not in white_positions: continue
-            index = white_positions[prev]
-            bw = white_width * 0.58
-            center = margin + (index + 1) * white_width
-            x0, x1 = center - bw/2, center + bw/2
-            active = midi_note in self.preview_active_notes
-            in_scale = not self.scale_highlighted or midi_note in self.scale_highlighted
-            if active:
-                fill = c["kba"]
-            elif not in_scale:
-                fill = "#111318" if dark else "#b0b5ba"
-            else:
-                fill = c["kb"]
-            rect = canvas.create_rectangle(x0, 0, x1, black_height, fill=fill, outline="#0a0d12", width=1)
+            previous_white = midi_note - 1
+            while previous_white not in white_positions and previous_white >= min(WHITE_MIDI_NOTES):
+                previous_white -= 1
+            if previous_white not in white_positions:
+                continue
+            index = white_positions[previous_white]
+            black_width = white_width * 0.62
+            center = (index + 1) * white_width
+            x0 = center - black_width / 2
+            x1 = center + black_width / 2
+            fill = getattr(self, "_active_key_black_active", UI_KEY_BLACK_ACTIVE) if midi_note in self.preview_active_notes else getattr(self, "_active_key_black", UI_KEY_BLACK)
+            rect = canvas.create_rectangle(x0, 0, x1, black_height, fill=fill, outline="#020409")
             binding = KEY_MAP[midi_note]
-            canvas.create_text((x0+x1)/2, black_height-12, text=binding.label,
-                              fill="#ffffffcc", font=("Segoe UI", 7, "bold"))
+            key_text = canvas.create_text(
+                (x0 + x1) / 2,
+                black_height - 16,
+                text=binding.label,
+                fill="#ffffff",
+                font=("Segoe UI", 8, "bold"),
+            )
+            self.preview_items[midi_note] = [rect, key_text]
             self.preview_rects[midi_note] = rect
+            self.preview_text[midi_note] = [key_text]
             self.preview_is_black[midi_note] = True
 
-        canvas.create_text(10, height-10, anchor="sw", text="C2", fill=c["muted"], font=("Segoe UI", 8, "bold"))
-        canvas.create_text(width-10, height-10, anchor="se", text="C7", fill=c["muted"], font=("Segoe UI", 8, "bold"))
-        self._draw_metronome_indicator()
+        canvas.create_text(
+            8,
+            height - 8,
+            anchor="sw",
+            text="C2",
+            fill=UI_MUTED,
+            font=("Segoe UI", 8, "bold"),
+        )
+        canvas.create_text(
+            width - 8,
+            height - 8,
+            anchor="se",
+            text="C7",
+            fill=UI_MUTED,
+            font=("Segoe UI", 8, "bold"),
+        )
 
     def _apply_keyboard_highlights(self) -> None:
         if not hasattr(self, "keyboard_canvas"):
             return
-        c = getattr(self, "_c", {"kw": UI_KEY_WHITE, "kwa": UI_KEY_WHITE_ACTIVE,
-                                  "kb": UI_KEY_BLACK, "kba": UI_KEY_BLACK_ACTIVE})
+        kw = getattr(self, "_active_key_white", UI_KEY_WHITE)
+        kwa = getattr(self, "_active_key_white_active", UI_KEY_WHITE_ACTIVE)
+        kb = getattr(self, "_active_key_black", UI_KEY_BLACK)
+        kba = getattr(self, "_active_key_black_active", UI_KEY_BLACK_ACTIVE)
         for midi_note, rect in self.preview_rects.items():
             active = midi_note in self.preview_active_notes
             is_black = self.preview_is_black.get(midi_note, False)
-            vel = self.preview_note_velocities.get(midi_note, 100) / 127.0
-            if active:
-                if is_black:
-                    r, g, b = min(255,int(40+vel*215)), min(255,int(166+vel*89)), min(255,int(255-vel*20))
-                else:
-                    r, g, b = min(255,int(88+vel*167)), min(255,int(166+vel*89)), min(255,int(255-vel*10))
-                fill = f"#{r:02x}{g:02x}{b:02x}"
-            else:
-                fill = c["kb"] if is_black else c["kw"]
+            fill = kba if active and is_black else kwa if active else kb if is_black else kw
             self.keyboard_canvas.itemconfigure(rect, fill=fill)
 
     def highlight_midi_notes(self, notes: set[int], add: bool = False) -> None:
@@ -5413,23 +5055,6 @@ class PianoMacroApp(tk.Tk):
             self.library_hint.set(f"{visible} of {total} song{'s' if total != 1 else ''} shown.")
         else:
             self.library_hint.set(f"{total} saved song{'s' if total != 1 else ''}.")
-        self._update_library_stats()
-
-    def _update_library_stats(self) -> None:
-        if not hasattr(self, "library_stats"):
-            return
-        total = len(self.library_entries)
-        if total == 0:
-            self.library_stats.set("")
-            return
-        favorites = sum(1 for e in self.library_entries if e.get("favorite"))
-        total_plays = sum(int(e.get("play_count", 0)) for e in self.library_entries)
-        parts = [f"{total} songs"]
-        if favorites:
-            parts.append(f"{favorites} starred")
-        if total_plays:
-            parts.append(f"{total_plays} plays")
-        self.library_stats.set("  ".join(parts))
 
     def _selected_library_entry(self) -> dict[str, object] | None:
         if not hasattr(self, "library_listbox"):
@@ -5456,54 +5081,6 @@ class PianoMacroApp(tk.Tk):
         title = entry.get("title", "Untitled Song")
         self.status.set(f"{'Starred' if not current else 'Unstarred'}: {title}")
 
-    def queue_song(self) -> None:
-        entry = self._selected_library_entry()
-        if entry is None:
-            self.status.set("Select a song first.")
-            return
-        sid = str(entry.get("id", ""))
-        if sid in self.playback_queue:
-            self.status.set(f"Already queued: {entry.get('title', '?')}")
-            return
-        self.playback_queue.append(sid)
-        n = len(self.playback_queue)
-        self.status.set(f"Queued ({n}): {entry.get('title', '?')}")
-        self.queue_status.set(f"Queue: {n}" if n else "")
-
-    def clear_queue(self) -> None:
-        count = len(self.playback_queue)
-        self.playback_queue.clear()
-        self.status.set(f"Queue cleared ({count} songs removed).")
-        self.queue_status.set("")
-
-    def play_queue(self) -> None:
-        if not self.playback_queue:
-            self.status.set("Queue is empty. Right-click a song and select Queue.")
-            return
-        if self.play_thread and self.play_thread.is_alive():
-            self.status.set("Already playing. Stop first.")
-            return
-        sid = self.playback_queue.pop(0)
-        entry = self._find_song_by_id(sid)
-        if entry is None:
-            self.status.set("Queued song not found in library.")
-            self.play_queue()
-            return
-        self._load_song_entry_into_editor(entry)
-        remaining = len(self.playback_queue)
-        self.queue_status.set(f"Queue: {remaining}" if remaining else "")
-        self.status.set(f"Playing queue ({remaining} remaining): {entry.get('title', '?')}")
-        self.start_playback()
-        if self.play_thread:
-            self.after(500, self._monitor_queue_playback)
-
-    def _monitor_queue_playback(self) -> None:
-        if self.play_thread and self.play_thread.is_alive():
-            self.after(500, self._monitor_queue_playback)
-            return
-        if self.playback_queue:
-            self.play_queue()
-
     def _show_library_context_menu(self, event: tk.Event) -> None:
         self.library_listbox.selection_clear(0, tk.END)
         index = self.library_listbox.nearest(event.y)
@@ -5514,7 +5091,6 @@ class PianoMacroApp(tk.Tk):
                         activebackground=UI_SURFACE_HOVER, activeforeground=UI_TEXT)
         menu.add_command(label="Load", command=self.load_selected_song)
         menu.add_command(label="Duplicate", command=self.duplicate_selected_song)
-        menu.add_command(label="Queue", command=self.queue_song)
         fav_label = "Unstar" if (entry and entry.get("favorite")) else "Star"
         menu.add_command(label=fav_label, command=self.toggle_favorite_song)
         menu.add_separator()
@@ -5741,43 +5317,6 @@ class PianoMacroApp(tk.Tk):
         except Exception as exc:
             messagebox.showerror("Import failed", str(exc))
 
-    def import_from_clipboard(self) -> None:
-        try:
-            text = self.clipboard_get()
-        except Exception:
-            self.status.set("Clipboard is empty or inaccessible.")
-            return
-        if not text.strip():
-            self.status.set("Clipboard is empty.")
-            return
-        self.new_song()
-        self.score_text.delete("1.0", tk.END)
-        self.score_text.insert("1.0", text.strip())
-        self.source_mode.set("text")
-        self._mark_dirty()
-        self._update_title()
-        self.status.set("Pasted from clipboard. Edit and save.")
-
-    def export_as_plain_text(self) -> None:
-        text = self.score_text.get("1.0", tk.END).strip()
-        if not text:
-            self.status.set("No text to export.")
-            return
-        suggested = re.sub(r"[^A-Za-z0-9_. -]+", "", self.song_title.get()).strip() or "song"
-        path = filedialog.asksaveasfilename(
-            title="Export as plain text",
-            defaultextension=".txt",
-            initialfile=f"{suggested}.txt",
-            filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
-        )
-        if not path:
-            return
-        try:
-            Path(path).write_text(text, encoding="utf-8")
-            self.status.set(f"Exported text: {Path(path).name}")
-        except Exception as exc:
-            messagebox.showerror("Export failed", str(exc))
-
     def import_multiple_songs(self) -> None:
         paths = filedialog.askopenfilenames(
             title="Import multiple JJS Piano Studio songs",
@@ -5830,13 +5369,6 @@ class PianoMacroApp(tk.Tk):
                 ("timing_min_note_beats", self.timing_min_note_beats),
                 ("timing_max_note_beats", self.timing_max_note_beats),
                 ("timing_gap_ms", self.timing_gap_ms),
-                ("loop_start_sec", self.loop_start_sec),
-                ("loop_end_sec", self.loop_end_sec),
-                ("synth_volume", self.synth_volume),
-                ("practice_start_speed", self.practice_start_speed),
-                ("practice_target_speed", self.practice_target_speed),
-                ("practice_increment", self.practice_increment),
-                ("practice_loops_per_step", self.practice_loops_per_step),
             ]
             for key, variable in numeric_settings:
                 if key in data:
@@ -5845,20 +5377,6 @@ class PianoMacroApp(tk.Tk):
                 self.preview_only.set(bool(data["preview_only"]))
             if isinstance(data.get("timing_auto_offset"), bool):
                 self.timing_auto_offset.set(bool(data["timing_auto_offset"]))
-            if isinstance(data.get("loop_enabled"), bool):
-                self.loop_enabled.set(bool(data["loop_enabled"]))
-            if isinstance(data.get("synth_enabled"), bool):
-                self.synth_enabled.set(bool(data["synth_enabled"]))
-            if isinstance(data.get("practice_mode"), bool):
-                self.practice_mode.set(bool(data["practice_mode"]))
-            if isinstance(data.get("is_dark_theme"), bool):
-                stored_theme = bool(data["is_dark_theme"])
-                if stored_theme != getattr(self, "_is_dark_theme", True):
-                    self._is_dark_theme = stored_theme
-                    self._configure_theme()
-            string_val = data.get("synth_instrument")
-            if isinstance(string_val, str) and string_val in MIDI_INSTRUMENTS:
-                self.synth_instrument.set(string_val)
 
             string_settings: list[tuple[str, tk.StringVar, list[str] | None]] = [
                 ("high_note", self.high_note, ["C6", "C7"]),
@@ -5907,18 +5425,6 @@ class PianoMacroApp(tk.Tk):
                 "timing_min_note_beats": float(self.timing_min_note_beats.get()),
                 "timing_max_note_beats": float(self.timing_max_note_beats.get()),
                 "timing_gap_ms": float(self.timing_gap_ms.get()),
-                "loop_enabled": bool(self.loop_enabled.get()),
-                "loop_start_sec": float(self.loop_start_sec.get()),
-                "loop_end_sec": float(self.loop_end_sec.get()),
-                "synth_enabled": bool(self.synth_enabled.get()),
-                "synth_instrument": self.synth_instrument.get(),
-                "synth_volume": int(self.synth_volume.get()),
-                "practice_mode": bool(self.practice_mode.get()),
-                "practice_start_speed": float(self.practice_start_speed.get()),
-                "practice_target_speed": float(self.practice_target_speed.get()),
-                "practice_increment": float(self.practice_increment.get()),
-                "practice_loops_per_step": int(self.practice_loops_per_step.get()),
-                "is_dark_theme": bool(getattr(self, "_is_dark_theme", True)),
                 "play_hotkey": self.play_hotkey.get(),
                 "pause_hotkey": self.pause_hotkey.get(),
                 "stop_hotkey": self.stop_hotkey.get(),
@@ -5966,9 +5472,6 @@ class PianoMacroApp(tk.Tk):
             name = self._hotkey_name(key)
             if not name:
                 return
-            if self.recording.get() and self.record_start_time > 0:
-                elapsed = time.perf_counter() - self.record_start_time
-                self.recorded_events.append((elapsed, "down", name))
             if self.hotkey_capture_target is not None:
                 self.after(0, lambda captured=name: self._apply_captured_hotkey(captured))
                 return
@@ -5991,9 +5494,6 @@ class PianoMacroApp(tk.Tk):
             name = self._hotkey_name(key)
             if name:
                 self.pressed_hotkey_parts.discard(name)
-                if self.recording.get() and self.record_start_time > 0:
-                    elapsed = time.perf_counter() - self.record_start_time
-                    self.recorded_events.append((elapsed, "up", name))
 
         self.listener = pynput_keyboard.Listener(on_press=on_press, on_release=on_release)
         self.listener.daemon = True
@@ -6137,91 +5637,7 @@ class PianoMacroApp(tk.Tk):
             return char.lower()
         return None
 
-    def toggle_recording(self) -> None:
-        if self.recording.get():
-            self._stop_recording()
-        else:
-            self._start_recording()
-
-    def _start_recording(self) -> None:
-        self.recorded_events.clear()
-        self.record_start_time = time.perf_counter()
-        self.recording.set(True)
-        self.record_btn.configure(text="Stop Rec", style="Danger.TButton")
-        self.status.set("Recording... Press Record again to stop.")
-
-    def _stop_recording(self) -> None:
-        self.recording.set(False)
-        self.record_btn.configure(text="Record", style="TButton")
-        if not self.recorded_events:
-            self.status.set("Nothing recorded.")
-            return
-        self._build_score_from_recording()
-
-    def _build_score_from_recording(self) -> None:
-        label_to_midi: dict[str, int] = {}
-        for midi_note, binding in KEY_MAP.items():
-            label_to_midi[binding.label.lower()] = midi_note
-
-        notes: list[tuple[float, float, int]] = []
-        active: dict[str, float] = {}
-        for timestamp, action, label in self.recorded_events:
-            clean = label.lower()
-            if action == "down" and clean not in active:
-                active[clean] = timestamp
-            elif action == "up" and clean in active:
-                start = active.pop(clean)
-                midi_note = label_to_midi.get(clean)
-                if midi_note and timestamp > start:
-                    notes.append((start, timestamp, midi_note))
-
-        if not notes:
-            self.status.set("No playable notes recorded.")
-            return
-
-        bpm = max(20.0, float(self.bpm.get()))
-        beat_seconds = 60.0 / bpm
-        tokens: list[str] = []
-        notes.sort(key=lambda n: n[0])
-        cursor = 0.0
-
-        i = 0
-        while i < len(notes):
-            start, end, midi = notes[i]
-            duration = max(0.01, end - start)
-            beats = max(0.25, round(duration / beat_seconds * 4) / 4)
-            chord_notes = [midi]
-            j = i + 1
-            while j < len(notes) and abs(notes[j][0] - start) < 0.05:
-                chord_notes.append(notes[j][2])
-                j += 1
-
-            if start > cursor + 0.01:
-                rest_beats = max(0.25, round((start - cursor) / beat_seconds * 4) / 4)
-                tokens.append(f"R:{PianoMacroApp._format_beats(rest_beats)}")
-
-            names = [midi_to_note_name(n) for n in sorted(set(chord_notes))]
-            if len(names) == 1:
-                token = names[0]
-            else:
-                token = "[" + " ".join(names) + "]"
-            token += f":{PianoMacroApp._format_beats(beats)}"
-            tokens.append(token)
-            cursor = max(cursor, start + beats * beat_seconds)
-            i = j
-
-        text = "\n".join(" ".join(tokens[k:k + 8]) for k in range(0, len(tokens), 8))
-        self.new_song()
-        self.score_text.delete("1.0", tk.END)
-        self.score_text.insert("1.0", text)
-        self.song_title.set("Recording")
-        self.song_notes.set(f"Recorded {len(notes)} notes at {bpm:.0f} BPM.")
-        self.source_mode.set("text")
-        self._mark_dirty()
-        self._update_title()
-        self.status.set(f"Recording loaded: {len(notes)} notes, {len(tokens)} events.")
-        self.analyze_current_source(show_popup=False)
-        self.recorded_events.clear()
+    def insert_test_scale(self) -> None:
         self.loaded_midi_actions = None
         self.loaded_midi_name.set("No MIDI loaded")
         self.source_mode.set("text")
@@ -6269,119 +5685,14 @@ class PianoMacroApp(tk.Tk):
         if not path:
             return
         try:
-            tracks = get_midi_track_info(path)
-            track_indices: set[int] | None = None
-            if len(tracks) > 1:
-                selected = self._select_midi_tracks(tracks)
-                if selected is None:
-                    return
-                track_indices = selected
-            self.loaded_midi_actions = load_midi_actions(path, track_indices=track_indices)
+            self.loaded_midi_actions = load_midi_actions(path)
         except Exception as exc:
             messagebox.showerror("MIDI load failed", str(exc))
             return
         self.source_mode.set("midi")
         self.loaded_midi_name.set(Path(path).name)
-        self._add_recent_midi(path)
         self.status.set(f"Loaded MIDI: {Path(path).name}")
         self.analyze_current_source(show_popup=False)
-
-    def _add_recent_midi(self, path: str) -> None:
-        if path in self.recent_midi_files:
-            self.recent_midi_files.remove(path)
-        self.recent_midi_files.insert(0, path)
-        self.recent_midi_files = self.recent_midi_files[:10]
-
-    def _show_recent_midi_menu(self, event: tk.Event) -> None:
-        menu = tk.Menu(self, tearoff=0, bg=UI_SURFACE, fg=UI_TEXT,
-                        activebackground=UI_SURFACE_HOVER, activeforeground=UI_TEXT)
-        if not self.recent_midi_files:
-            menu.add_command(label="(no recent files)", state=tk.DISABLED)
-        else:
-            for path in self.recent_midi_files[:8]:
-                name = Path(path).name
-                menu.add_command(
-                    label=f"{name[:50]}{'...' if len(name)>50 else ''}",
-                    command=lambda p=path: self._load_recent_midi(p),
-                )
-            menu.add_separator()
-            menu.add_command(label="Clear recent", command=lambda: self.recent_midi_files.clear())
-        try:
-            menu.tk_popup(event.x_root, event.y_root)
-        finally:
-            menu.grab_release()
-
-    def _load_recent_midi(self, path: str) -> None:
-        if not Path(path).exists():
-            self.recent_midi_files = [p for p in self.recent_midi_files if p != path]
-            self.status.set("Recent MIDI file no longer exists.")
-            return
-        try:
-            tracks = get_midi_track_info(path)
-            track_indices: set[int] | None = None
-            if len(tracks) > 1:
-                selected = self._select_midi_tracks(tracks)
-                if selected is None:
-                    return
-                track_indices = selected
-            self.loaded_midi_actions = load_midi_actions(path, track_indices=track_indices)
-        except Exception as exc:
-            messagebox.showerror("MIDI load failed", str(exc))
-            return
-        self.source_mode.set("midi")
-        self.loaded_midi_name.set(Path(path).name)
-        self._add_recent_midi(path)
-        self.status.set(f"Loaded MIDI: {Path(path).name}")
-        self.analyze_current_source(show_popup=False)
-
-    def _select_midi_tracks(self, tracks: list[dict[str, object]]) -> set[int] | None:
-        dialog = tk.Toplevel(self)
-        dialog.title("Select MIDI Tracks")
-        dialog.geometry("450x350")
-        dialog.configure(bg=getattr(self, "_active_bg", UI_BG))
-        dialog.transient(self)
-        dialog.resizable(False, False)
-        dialog.grab_set()
-
-        frame = ttk.Frame(dialog, padding=16)
-        frame.pack(fill=tk.BOTH, expand=True)
-        ttk.Label(frame, text=f"Select tracks to load ({len(tracks)} tracks found):", style="Section.TLabel").pack(anchor="w")
-
-        list_frame = ttk.Frame(frame)
-        list_frame.pack(fill=tk.BOTH, expand=True, pady=(8, 12))
-        listbox = tk.Listbox(list_frame, selectmode="extended", height=10, activestyle="dotbox")
-        listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self._style_listbox(listbox)
-
-        for t in tracks:
-            name = str(t.get("name", "?"))
-            notes = int(t.get("notes", 0))
-            chs = t.get("channels", [])
-            ch_str = f"ch:{','.join(str(c) for c in chs)}" if chs else ""
-            listbox.insert(tk.END, f"{name}  ({notes} notes)  {ch_str}")
-
-        for i in range(len(tracks)):
-            if int(tracks[i].get("notes", 0)) > 0:
-                listbox.selection_set(i)
-
-        result: set[int] | None = None
-
-        def on_ok() -> None:
-            nonlocal result
-            sel = listbox.curselection()
-            if not sel:
-                messagebox.showwarning("Track selection", "Select at least one track.", parent=dialog)
-                return
-            result = {int(tracks[i]["index"]) for i in sel}
-            dialog.destroy()
-
-        ttk.Button(frame, text="Select All", command=lambda: listbox.selection_set(0, tk.END)).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(frame, text="Clear", command=lambda: listbox.selection_clear(0, tk.END)).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(frame, text="Load Selected", command=on_ok, style="Accent.TButton").pack(side=tk.RIGHT, padx=(6, 0))
-        ttk.Button(frame, text="Cancel", command=dialog.destroy).pack(side=tk.RIGHT)
-
-        dialog.wait_window()
-        return result
 
     def _online_midi_repair_settings(self) -> dict[str, float | bool]:
         return {
@@ -6655,218 +5966,6 @@ class PianoMacroApp(tk.Tk):
         start_var.trace_add("write", lambda *_: draw_timeline())
         end_var.trace_add("write", lambda *_: draw_timeline())
         window.after(80, draw_timeline)
-
-    def open_piano_roll_editor(self) -> None:
-        try:
-            settings = self.read_settings()
-            actions, source_name = self._base_actions_for_current_source(settings)
-            notes = scheduled_actions_to_audio_notes(actions)
-        except Exception as exc:
-            messagebox.showerror("Piano Roll", str(exc))
-            return
-        if not notes:
-            messagebox.showinfo("Piano Roll", "No notes to display. Load a MIDI or enter a text score first.")
-            return
-
-        window = tk.Toplevel(self)
-        window.title("Piano Roll Editor")
-        window.geometry("1020x620")
-        window.minsize(800, 440)
-        window.configure(bg=getattr(self, "_active_bg", UI_BG))
-        window.transient(self)
-
-        bpm = max(1.0, float(self.bpm.get()))
-        beat_seconds = 60.0 / bpm
-        duration = max(note.end for note in notes)
-        total_beats = duration / beat_seconds
-        low_midi = min(note.midi for note in notes)
-        high_midi = max(note.midi for note in notes)
-        low_midi = max(24, low_midi - 4)
-        high_midi = min(108, high_midi + 4)
-        note_range = high_midi - low_midi + 1
-
-        px_per_beat = 42
-        px_per_note = 14
-        left_margin = 52
-        top_margin = 32
-        canvas_width = max(600, left_margin + int(total_beats * px_per_beat) + 40)
-        canvas_height = top_margin + note_range * px_per_note + 20
-
-        root = ttk.Frame(window, padding=8)
-        root.pack(fill=tk.BOTH, expand=True)
-
-        toolbar = ttk.Frame(root)
-        toolbar.pack(fill=tk.X, pady=(0, 6))
-        ttk.Label(toolbar, text=f"Piano Roll - {source_name}  |  {len(notes)} notes  |  {bpm:.0f} BPM  |  {midi_to_note_name(low_midi)}-{midi_to_note_name(high_midi)}",
-                  style="Section.TLabel").pack(side=tk.LEFT)
-        ttk.Button(toolbar, text="Apply", command=lambda: apply_changes(), style="Accent.TButton").pack(side=tk.RIGHT, padx=(4, 0))
-        ttk.Button(toolbar, text="Preview", command=lambda: preview_roll()).pack(side=tk.RIGHT, padx=4)
-        ttk.Button(toolbar, text="Add Note", command=lambda: add_note_at_cursor()).pack(side=tk.RIGHT, padx=4)
-        ttk.Button(toolbar, text="Delete Selected", command=lambda: delete_selected()).pack(side=tk.RIGHT, padx=4)
-
-        canvas_frame = ttk.Frame(root)
-        canvas_frame.pack(fill=tk.BOTH, expand=True)
-        h_scroll = ttk.Scrollbar(canvas_frame, orient=tk.HORIZONTAL)
-        v_scroll = ttk.Scrollbar(canvas_frame, orient=tk.VERTICAL)
-        canvas = tk.Canvas(canvas_frame, bg=getattr(self, "_active_field", UI_FIELD),
-                           highlightthickness=1, highlightbackground=getattr(self, "_active_border", UI_BORDER),
-                           scrollregion=(0, 0, canvas_width, canvas_height))
-        canvas.grid(row=0, column=0, sticky="nsew")
-        h_scroll.grid(row=1, column=0, sticky="ew")
-        v_scroll.grid(row=0, column=1, sticky="ns")
-        canvas.configure(xscrollcommand=h_scroll.set, yscrollcommand=v_scroll.set)
-        h_scroll.configure(command=canvas.xview)
-        v_scroll.configure(command=canvas.yview)
-        canvas_frame.rowconfigure(0, weight=1)
-        canvas_frame.columnconfigure(0, weight=1)
-
-        editable_notes: list[dict[str, object]] = [
-            {"start": n.start, "end": n.end, "midi": n.midi, "velocity": n.velocity}
-            for n in notes
-        ]
-        selected_index: int | None = [None]
-        drag_data: dict[str, object] = {}
-        cursor_beat = [0.0]
-
-        def note_color(midi_note: int) -> str:
-            name = midi_to_note_name(midi_note)
-            if "#" in name:
-                return "#1a1a2e"
-            return "#16213e"
-
-        def note_color_selected() -> str:
-            return "#2980b9"
-
-        def draw_grid() -> None:
-            canvas.delete("grid")
-            for b in range(0, int(total_beats) + 2):
-                x = left_margin + b * px_per_beat
-                is_bar = b % 4 == 0
-                color = "#3a4455" if is_bar else "#252d38"
-                width = 2 if is_bar else 1
-                canvas.create_line(x, 0, x, canvas_height, fill=color, width=width, tags="grid")
-                if b % 2 == 0:
-                    canvas.create_text(x, 14, text=str(b), fill=getattr(self, "_active_muted", UI_MUTED) if hasattr(self, "_active_muted") else UI_MUTED,
-                                      font=("Segoe UI", 7), tags="grid")
-            for midi_note in range(low_midi, high_midi + 1):
-                y = top_margin + (high_midi - midi_note) * px_per_note
-                name = midi_to_note_name(midi_note)
-                is_black = "#" in name
-                color = "#1e2530" if is_black else "#252d38"
-                canvas.create_rectangle(left_margin, y, canvas_width, y + px_per_note, fill=color, outline="", tags="grid")
-                if not is_black:
-                    canvas.create_text(left_margin - 6, y + px_per_note // 2, text=name,
-                                      fill=getattr(self, "_active_muted", UI_MUTED) if hasattr(self, "_active_muted") else UI_MUTED,
-                                      font=("Segoe UI", 8), anchor="e", tags="grid")
-
-        def draw_notes() -> None:
-            canvas.delete("note")
-            for idx, note in enumerate(editable_notes):
-                x1 = left_margin + float(note["start"]) / beat_seconds * px_per_beat
-                x2 = left_margin + float(note["end"]) / beat_seconds * px_per_beat
-                y1 = top_margin + (high_midi - int(note["midi"])) * px_per_note + 1
-                y2 = y1 + px_per_note - 2
-                color = note_color_selected() if idx == selected_index[0] else note_color(int(note["midi"]))
-                r = canvas.create_rectangle(x1, y1, max(x1 + 1, x2), y2, fill=color,
-                                            outline="#4a90d9" if idx == selected_index[0] else "#3a4a5a",
-                                            width=2 if idx == selected_index[0] else 1, tags="note")
-                canvas.tag_bind(r, "<Button-1>", lambda e, i=idx: select_note(i, e))
-                canvas.tag_bind(r, "<B1-Motion>", lambda e, i=idx: drag_note(i, e))
-                canvas.tag_bind(r, "<Button-3>", lambda e, i=idx: delete_note(i))
-
-        def select_note(index: int, event: tk.Event) -> None:
-            selected_index[0] = index
-            drag_data["start_x"] = event.x
-            drag_data["start_y"] = event.y
-            drag_data["note_start"] = float(editable_notes[index]["start"])
-            drag_data["note_end"] = float(editable_notes[index]["end"])
-            drag_data["note_midi"] = int(editable_notes[index]["midi"])
-            drag_data["resizing"] = abs(event.x - (left_margin + drag_data["note_end"] / beat_seconds * px_per_beat)) < 8
-            draw_notes()
-
-        def drag_note(index: int, event: tk.Event) -> None:
-            if selected_index[0] != index:
-                return
-            dx = (event.x - drag_data.get("start_x", 0)) / px_per_beat * beat_seconds
-            dy = -(event.y - drag_data.get("start_y", 0)) / px_per_note
-            if drag_data.get("resizing"):
-                new_end = max(float(drag_data["note_start"]) + 0.02, float(drag_data["note_end"]) + dx)
-                editable_notes[index]["end"] = new_end
-            else:
-                new_start = max(0.0, float(drag_data["note_start"]) + dx)
-                duration = float(drag_data["note_end"]) - float(drag_data["note_start"])
-                new_midi = max(0, min(127, int(float(drag_data["note_midi"]) + round(dy))))
-                editable_notes[index]["start"] = new_start
-                editable_notes[index]["end"] = new_start + duration
-                editable_notes[index]["midi"] = new_midi
-            draw_notes()
-
-        def delete_note(index: int) -> None:
-            editable_notes.pop(index)
-            selected_index[0] = None
-            draw_notes()
-
-        def delete_selected() -> None:
-            if selected_index[0] is not None:
-                delete_note(selected_index[0])
-
-        def add_note_at_cursor() -> None:
-            midi = low_midi + note_range // 2
-            start = cursor_beat[0] * beat_seconds
-            editable_notes.append({
-                "start": start,
-                "end": start + beat_seconds * 0.5,
-                "midi": midi,
-                "velocity": 84,
-            })
-            selected_index[0] = len(editable_notes) - 1
-            draw_notes()
-
-        def canvas_click(event: tk.Event) -> None:
-            if event.x < left_margin:
-                return
-            beat = (canvas.canvasx(event.x) - left_margin) / px_per_beat
-            midi = high_midi - int((canvas.canvasy(event.y) - top_margin) / px_per_note)
-            if low_midi <= midi <= high_midi:
-                start = max(0.0, beat * beat_seconds)
-                editable_notes.append({
-                    "start": start,
-                    "end": start + beat_seconds * 0.5,
-                    "midi": midi,
-                    "velocity": 84,
-                })
-                selected_index[0] = len(editable_notes) - 1
-                draw_notes()
-
-        def apply_changes() -> None:
-            if not editable_notes:
-                return
-            actions: list[ScheduledAction] = []
-            for note in editable_notes:
-                p = Playable("midi", int(note["midi"]))
-                actions.append(ScheduledAction(float(note["start"]), "down", (p,)))
-                actions.append(ScheduledAction(float(note["end"]), "up", (p,)))
-            self.loaded_midi_actions = coalesce_scheduled_actions(actions)
-            self.source_mode.set("midi")
-            self.loaded_midi_name.set(f"{source_name} (edited)")
-            self.status.set(f"Applied piano roll: {len(editable_notes)} notes.")
-            self.analyze_current_source(show_popup=False)
-            window.destroy()
-
-        def preview_roll() -> None:
-            apply_changes()
-            self.start_preview_playback()
-
-        canvas.bind("<Button-1>", lambda e: select_note(-1, e) if e.x < left_margin else canvas_click(e))
-        canvas.bind("<Button-3>", lambda e: delete_selected() if selected_index[0] is not None else None)
-        canvas.bind("<MouseWheel>", lambda e: canvas.yview_scroll(-1 if e.delta > 0 else 1, "units"))
-        canvas.bind("<Shift-MouseWheel>", lambda e: canvas.xview_scroll(-1 if e.delta > 0 else 1, "units"))
-        for i in range(10):
-            canvas.bind(f"<Key-{i}>", lambda e: None)
-
-        draw_grid()
-        draw_notes()
-        canvas.focus_set()
 
     def open_online_midi_search_tool(self) -> None:
         window = tk.Toplevel(self)
@@ -8087,21 +7186,6 @@ class PianoMacroApp(tk.Tk):
             ]
             key_conflicts = max_visual_piano_key_conflicts(conflict_notes)
 
-            chords: list[str] = []
-            if raw_notes:
-                chord_buckets: dict[int, list[int]] = {}
-                anotes = scheduled_actions_to_audio_notes(actions)
-                for note in anotes:
-                    bucket = int(note.start * settings.bpm / 60.0 / 0.5)
-                    chord_buckets.setdefault(bucket, []).append(note.midi + settings.transpose)
-                for bucket_notes in chord_buckets.values():
-                    if len(bucket_notes) >= 2:
-                        ch = self._detect_chord_name(bucket_notes)
-                        if ch and ch not in chords:
-                            chords.append(ch)
-                        if len(chords) >= 6:
-                            break
-
             if raw_notes:
                 low_note = midi_to_note_name(min(shifted_notes))
                 high_note = midi_to_note_name(max(shifted_notes))
@@ -8109,7 +7193,6 @@ class PianoMacroApp(tk.Tk):
             else:
                 source_range = "raw keys only"
 
-            chord_text = f"\nChords: {', '.join(chords)}" if chords else ""
             summary = (
                 f"{source_name}\n"
                 f"Length: {duration:.1f}s | Notes: {len(raw_notes)}"
@@ -8117,7 +7200,6 @@ class PianoMacroApp(tk.Tk):
                 f"Range after transpose: {source_range}\n"
                 f"Out of range: {out_count} | Max held: {self._max_simultaneous_notes(actions)} | Key conflicts: {key_conflicts}\n"
                 f"Suggested transpose: {suggested:+d}"
-                f"{chord_text}"
             )
             self.analysis_summary.set(summary)
             if show_popup:
@@ -8136,44 +7218,6 @@ class PianoMacroApp(tk.Tk):
         self.transpose.set(self.last_suggested_transpose)
         self.status.set(f"Applied transpose {self.last_suggested_transpose:+d}.")
         self.analyze_current_source(show_popup=False)
-        self._preview_transpose_on_keyboard()
-
-    def _tap_tempo(self) -> None:
-        if not hasattr(self, "_tap_times"):
-            self._tap_times: list[float] = []
-        now = time.perf_counter()
-        self._tap_times.append(now)
-        self._tap_times = [t for t in self._tap_times if now - t < 4.0]
-        if len(self._tap_times) >= 3:
-            intervals = [self._tap_times[i] - self._tap_times[i - 1] for i in range(1, len(self._tap_times))]
-            intervals.sort()
-            median = intervals[len(intervals) // 2]
-            if median > 0:
-                bpm = round(60.0 / median)
-                self.bpm.set(max(20, min(320, bpm)))
-                self.status.set(f"Tap tempo: {self.bpm.get()} BPM ({len(self._tap_times)} taps)")
-                return
-        self.status.set(f"Tap tempo: {len(self._tap_times)} taps (need 3+)")
-
-    def _preview_transpose_on_keyboard(self) -> None:
-        try:
-            settings = self.read_settings()
-            actions, _ = self._actions_for_current_source(settings)
-            if not actions:
-                return
-            transpose = int(self.transpose.get())
-            notes: set[int] = set()
-            for action in actions[:min(40, len(actions))]:
-                for playable in action.notes:
-                    if playable.kind == "midi":
-                        fitted = self._fit_midi_note(int(playable.value) + transpose, settings)
-                        if fitted is not None:
-                            notes.add(fitted)
-            if notes:
-                self.highlight_midi_notes(notes)
-                self.after(2000, self.clear_keyboard_highlights)
-        except Exception:
-            pass
 
     def tighten_loaded_midi_timing(self) -> None:
         if not self.loaded_midi_actions:
@@ -8339,37 +7383,19 @@ class PianoMacroApp(tk.Tk):
             settings = self.read_settings()
             preview_only = bool(self.preview_only.get()) if preview_override is None else bool(preview_override)
             actions, source_name = self._actions_for_current_source(settings)
-            print(f"[DEBUG] _start_playback: got {len(actions)} actions from source '{source_name}', mode={self.source_mode.get()}")
             actions = coalesce_scheduled_actions(actions)
-            print(f"[DEBUG] After coalesce: {len(actions)} actions")
             if not actions:
                 raise ValueError("Nothing to play.")
         except Exception as exc:
             messagebox.showerror("Could not start", str(exc))
-            print(f"[DEBUG] _start_playback ERROR: {exc}")
             return
-
-        worker_state = {
-            "loop_enabled": bool(self.loop_enabled.get()),
-            "loop_start": float(self.loop_start_sec.get()),
-            "loop_end": float(self.loop_end_sec.get()),
-            "practice_mode": bool(self.practice_mode.get()),
-            "practice_start": float(self.practice_start_speed.get()),
-            "practice_target": float(self.practice_target_speed.get()),
-            "practice_inc": float(self.practice_increment.get()),
-            "practice_loops": int(self.practice_loops_per_step.get()),
-            "metronome": bool(self.metronome_enabled.get()),
-            "synth_on": bool(self.synth_enabled.get()),
-            "synth_vol": int(self.synth_volume.get()),
-        }
-        print(f"[DEBUG] worker_state: { {k: v for k, v in worker_state.items() if k != 'synth_vol'} }")
 
         self.stop_event.clear()
         self.pause_event.clear()
         self.progress.set(0.0)
         self.play_thread = threading.Thread(
             target=self._play_worker,
-            args=(actions, settings, source_name, preview_only, worker_state),
+            args=(actions, settings, source_name, preview_only),
             daemon=True,
         )
         self.play_thread.start()
@@ -8390,8 +7416,6 @@ class PianoMacroApp(tk.Tk):
         self.stop_event.set()
         self.pause_event.clear()
         self.sender.release_all()
-        if self.synth:
-            self.synth.all_notes_off()
         self.clear_keyboard_highlights()
         self.status.set("Stopped.")
         self.progress.set(0.0)
@@ -8408,13 +7432,11 @@ class PianoMacroApp(tk.Tk):
                 return
 
             self.sender.key_down(binding)
-            self._synth_note_on(midi_note)
             self.highlight_midi_notes({midi_note})
             self._thread_progress(50.0)
             if not wait_until_precise(time.perf_counter() + hold_seconds, self.stop_event):
                 return
             self.sender.key_up(binding)
-            self._synth_note_off(midi_note)
             self.clear_keyboard_highlights()
             self._thread_progress(100.0)
             self._thread_status(f"Tested {note_name}. Phone tuner should show about {note_name}.")
@@ -8448,42 +7470,10 @@ class PianoMacroApp(tk.Tk):
         settings: PlaybackSettings,
         source_name: str,
         preview_only: bool,
-        ws: dict[str, object],
     ) -> None:
-        """Playback worker thread. Processes all actions in order, sending
-        key down/up events at their scheduled times. Supports looping,
-        practice mode ramping, and MIDI synth output.
-        """
         timer_enabled = begin_high_resolution_timer()
-        loop_enabled = bool(ws["loop_enabled"])
-        loop_start = max(0.0, float(ws["loop_start"]))
-        loop_end = max(0.0, float(ws["loop_end"]))
-        if loop_enabled and loop_end > 0 and loop_end <= loop_start:
-            loop_end = 0.0
-        loop_count = 0
-        practice = bool(ws["practice_mode"]) and loop_enabled
-        metronome_on = bool(ws["metronome"])
-        synth_on = bool(ws["synth_on"])
-        synth_vol = int(ws["synth_vol"])
-        if practice:
-            current_speed = max(0.10, float(ws["practice_start"]))
-            target_speed = max(current_speed, float(ws["practice_target"]))
-            increment = max(0.01, float(ws["practice_inc"]))
-            loops_per_step = max(1, int(ws["practice_loops"]))
-            self.practice_current_speed = current_speed
-            self.practice_loop_count = 0
-            settings.speed = current_speed
-            self._thread_status(f"Practice mode: {current_speed:.0%} speed (target: {target_speed:.0%})")
         try:
-            if not actions:
-                self._thread_progress(100.0)
-                self._thread_status("Nothing to play.")
-                return
-            total = max(action.seconds for action in actions)
-            loop_total = (min(total, loop_end) - loop_start
-                          if loop_enabled and loop_end > 0
-                          else total)
-
+            total = max(action.seconds for action in actions) if actions else 0.0
             if preview_only:
                 self._thread_status(f"Previewing {source_name}. No keys are being sent.")
             else:
@@ -8491,145 +7481,63 @@ class PianoMacroApp(tk.Tk):
                     f"Starting {source_name} with {self.sender.method} in {settings.start_delay:g}s. "
                     "Focus Roblox now."
                 )
-                if not wait_until_precise(time.perf_counter() + settings.start_delay,
-                                            self.stop_event):
+                if not wait_until_precise(time.perf_counter() + settings.start_delay, self.stop_event):
                     return
 
-            # Main playback loop
-            while True:
-                start_time = time.perf_counter()
-                if loop_enabled and loop_start > 0 and loop_count == 0:
-                    action_start_idx = 0
-                    for i, a in enumerate(actions):
-                        if a.seconds >= loop_start:
-                            action_start_idx = i
-                            break
-                    start_time -= loop_start / settings.speed
+            start_time = time.perf_counter()
+            index = 0
+            while index < len(actions):
+                if self.stop_event.is_set():
+                    return
+                if self.pause_event.is_set():
+                    pause_started = time.perf_counter()
+                    while self.pause_event.is_set():
+                        if self.stop_event.is_set():
+                            return
+                        time.sleep(0.02)
+                    start_time += time.perf_counter() - pause_started
+                    continue
+
+                action = actions[index]
+                target = action.seconds / settings.speed
+                target_deadline = start_time + target
+                now = time.perf_counter()
+                if now < target_deadline:
+                    if not wait_until_precise(target_deadline, self.stop_event, self.pause_event):
+                        continue
+                    continue
+
+                bindings: list[KeyBinding] = []
+                preview_notes: set[int] = set()
+                for playable in action.notes:
+                    binding = self._resolve_playable(playable, settings)
+                    if binding is not None:
+                        bindings.append(binding)
+                    preview_note = self._resolved_midi_note_for_preview(playable, settings)
+                    if preview_note is not None:
+                        preview_notes.add(preview_note)
+
+                # Deduplicate labels in a chord/action after octave fitting.
+                unique_bindings = list({binding.label: binding for binding in bindings}.values())
+                if action.action == "down":
+                    if not preview_only:
+                        for binding in sorted(unique_bindings, key=lambda item: item.shifted):
+                            self.sender.key_down(binding)
+                    if preview_notes:
+                        self.highlight_midi_notes(preview_notes, add=True)
                 else:
-                    action_start_idx = 0
+                    if not preview_only:
+                        for binding in unique_bindings:
+                            self.sender.key_up(binding)
+                    if preview_notes:
+                        self.unhighlight_midi_notes(preview_notes)
 
-                # Process all actions in this pass
-                index = action_start_idx
-                while index < len(actions):
-                    if self.stop_event.is_set():
-                        return
-                    if self.pause_event.is_set():
-                        pause_started = time.perf_counter()
-                        while self.pause_event.is_set():
-                            if self.stop_event.is_set():
-                                return
-                            time.sleep(0.02)
-                        start_time += time.perf_counter() - pause_started
-                        continue
-
-                    action = actions[index]
-
-                    # Loop boundary checks
-                    if loop_enabled and loop_end > 0 and action.seconds > loop_end:
-                        break
-                    if (loop_enabled and loop_start > 0
-                            and loop_count == 0
-                            and action.seconds < loop_start):
-                        index += 1
-                        continue
-
-                    # Wait until the action's scheduled time
-                    target = action.seconds / settings.speed
-                    target_deadline = start_time + target
-                    if time.perf_counter() < target_deadline:
-                        if not wait_until_precise(target_deadline,
-                                                   self.stop_event,
-                                                   self.pause_event):
-                            continue  # re-check stop/pause at top of loop
-
-                    # Resolve playable to key bindings and synth notes
-                    bindings: list[KeyBinding] = []
-                    preview_notes: set[int] = set()
-                    synth_notes: set[int] = set()
-                    for playable in action.notes:
-                        binding = self._resolve_playable(playable, settings)
-                        if binding is not None:
-                            bindings.append(binding)
-                        preview_note = self._resolved_midi_note_for_preview(playable, settings)
-                        if preview_note is not None:
-                            preview_notes.add(preview_note)
-                        if playable.kind == "midi":
-                            fitted = self._fit_midi_note(
-                                int(playable.value) + settings.transpose, settings)
-                            if fitted is not None:
-                                synth_notes.add(fitted)
-
-                    unique_bindings = list({b.label: b for b in bindings}.values())
-
-                    # Execute the action
-                    if action.action == "down":
-                        if not preview_only:
-                            # Send shift first for shifted keys
-                            for binding in sorted(unique_bindings,
-                                                   key=lambda b: b.shifted):
-                                self.sender.key_down(binding)
-                        for sn in synth_notes:
-                            self._synth_note_on(sn, 100, synth_on, synth_vol)
-                        for sn in synth_notes:
-                            self.preview_note_velocities[sn] = 100
-                        if preview_notes:
-                            self.highlight_midi_notes(preview_notes, add=True)
-                        if metronome_on:
-                            beat_pos = action.seconds * settings.bpm / 60.0
-                            if abs(beat_pos - round(beat_pos)) < 0.06:
-                                self.after(0, self._metronome_tick)
-                    else:  # "up"
-                        if not preview_only:
-                            for binding in unique_bindings:
-                                self.sender.key_up(binding)
-                        for sn in synth_notes:
-                            self._synth_note_off(sn, synth_on)
-                            self.preview_note_velocities.pop(sn, None)
-                        if preview_notes:
-                            self.unhighlight_midi_notes(preview_notes)
-
-                    # Progress
-                    if loop_total > 0:
-                        effective_sec = action.seconds - (loop_start if loop_enabled else 0)
-                        self._thread_progress(
-                            min(100.0, 100.0 * effective_sec / max(0.01, loop_total)))
-                    elif total > 0:
-                        self._thread_progress(
-                            min(100.0, 100.0 * action.seconds / total))
-
-                    index += 1
-
-                # End of one pass through the actions
-                loop_count += 1
-
-                if practice:
-                    steps_done = loop_count // loops_per_step
-                    new_speed = min(target_speed,
-                                     current_speed + steps_done * increment)
-                    if abs(new_speed - settings.speed) > 0.001:
-                        settings.speed = new_speed
-                        self.practice_current_speed = new_speed
-                    self._thread_status(
-                        f"Practice: {new_speed:.0%} speed "
-                        f"(step {steps_done + 1}, "
-                        f"loop {loop_count % loops_per_step + 1}/{loops_per_step})"
-                    )
-                    if new_speed >= target_speed and loop_count >= loops_per_step:
-                        self._thread_status(
-                            f"Practice complete! Reached {target_speed:.0%} speed.")
-                        break
-
-                if not loop_enabled and not practice:
-                    break
-                if loop_count > 9999:
-                    break
-                self._thread_status(f"Loop {loop_count}...")
+                if total > 0:
+                    self._thread_progress(min(100.0, 100.0 * action.seconds / total))
+                index += 1
 
             self._thread_progress(100.0)
-            status_text = "Finished."
-            if loop_count > 1:
-                status_text = f"Finished ({loop_count} loops)."
-            self._thread_status(status_text)
+            self._thread_status("Finished.")
         except Exception as exc:
             self._thread_status(f"Error: {exc}")
             self.after(0, lambda error=exc: messagebox.showerror("Playback error", str(error)))
@@ -8664,11 +7572,6 @@ class PianoMacroApp(tk.Tk):
         if self.listener is not None:
             try:
                 self.listener.stop()
-            except Exception:
-                pass
-        if self.synth:
-            try:
-                self.synth.close()
             except Exception:
                 pass
         self.destroy()
