@@ -4535,15 +4535,15 @@ class PianoMacroApp(tk.Tk):
         editor_actions = ttk.Frame(editor_frame)
         editor_actions.grid(row=1, column=0, sticky="ew", pady=(8, 4))
         ttk.Label(editor_actions, text="Song text", style="Section.TLabel").pack(side=tk.LEFT)
-        ttk.Button(editor_actions, text="Analyze", command=self.analyze_current_source).pack(side=tk.RIGHT, padx=(6, 0))
-        ttk.Button(editor_actions, text="Timeline", command=self.open_timeline_editor).pack(side=tk.RIGHT, padx=(6, 0))
-        ttk.Button(editor_actions, text="Auto Cleanup MIDI", command=self.cleanup_loaded_midi_playability).pack(
+        ttk.Button(editor_actions, text="⚡  Analyze", command=self.analyze_current_source).pack(side=tk.RIGHT, padx=(6, 0))
+        ttk.Button(editor_actions, text="⏱  Timeline", command=self.open_timeline_editor).pack(side=tk.RIGHT, padx=(6, 0))
+        ttk.Button(editor_actions, text="✨  Auto Cleanup MIDI", command=self.cleanup_loaded_midi_playability).pack(
             side=tk.RIGHT, padx=(6, 0)
         )
-        ttk.Button(editor_actions, text="MIDI to Text", command=self.convert_loaded_midi_to_text).pack(
+        ttk.Button(editor_actions, text="↔  MIDI to Text", command=self.convert_loaded_midi_to_text).pack(
             side=tk.RIGHT, padx=(6, 0)
         )
-        ttk.Button(editor_actions, text="Save Song", command=self.save_current_song, style="Accent.TButton").pack(
+        ttk.Button(editor_actions, text="✓  Save Song", command=self.save_current_song, style="Accent.TButton").pack(
             side=tk.RIGHT, padx=(6, 0)
         )
 
@@ -4611,6 +4611,10 @@ class PianoMacroApp(tk.Tk):
         self._spin(side, row, "End at sec", self.playback_end_at, 0, 3600, 0.5)
         row += 1
         self._spin(side, row, "Transpose", self.transpose, -36, 36, 1)
+        row += 1
+        ttk.Button(side, text="\u23eb  Preview Transpose", command=self._preview_transpose).grid(
+            row=row, column=0, columnspan=2, sticky="ew", pady=4
+        )
         row += 1
 
         ttk.Label(side, text="Highest key").grid(row=row, column=0, sticky="w", pady=4)
@@ -6498,6 +6502,28 @@ class PianoMacroApp(tk.Tk):
         self.transpose.set(self.last_suggested_transpose)
         self.status.set(f"Applied transpose {self.last_suggested_transpose:+d}.")
         self.analyze_current_source(show_popup=False)
+
+    def _preview_transpose(self) -> None:
+        try:
+            transpose = int(self.transpose.get())
+            settings = self.read_settings()
+            actions, _ = self._actions_for_current_source(settings)
+            if not actions:
+                self.status.set("No notes to preview transpose with.")
+                return
+            notes: set[int] = set()
+            for action in actions[:min(40, len(actions))]:
+                for playable in action.notes:
+                    if playable.kind == "midi":
+                        fitted = self._fit_midi_note(int(playable.value) + transpose, settings)
+                        if fitted is not None:
+                            notes.add(fitted)
+            if notes:
+                self.highlight_midi_notes(notes)
+                self.after(2000, self.clear_keyboard_highlights)
+                self.status.set(f"Transpose preview: {transpose:+d} semitones ({len(notes)} notes)")
+        except Exception as exc:
+            self.status.set(f"Transpose preview error: {exc}")
 
     def tighten_loaded_midi_timing(self) -> None:
         if not self.loaded_midi_actions:
