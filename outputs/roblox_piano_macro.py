@@ -4808,30 +4808,30 @@ class PianoMacroApp(tk.Tk):
         button_grid.grid(row=3, column=0, sticky="ew")
         button_grid.columnconfigure(0, weight=1)
         button_grid.columnconfigure(1, weight=1)
-        ttk.Button(button_grid, text="New", command=self.new_song).grid(row=0, column=0, sticky="ew", padx=(0, 4))
-        ttk.Button(button_grid, text="Load", command=self.load_selected_song).grid(row=0, column=1, sticky="ew")
-        ttk.Button(button_grid, text="Save", command=self.save_current_song, style="Accent.TButton").grid(
+        ttk.Button(button_grid, text="➕  New", command=self.new_song).grid(row=0, column=0, sticky="ew", padx=(0, 4))
+        ttk.Button(button_grid, text="↓  Load", command=self.load_selected_song).grid(row=0, column=1, sticky="ew")
+        ttk.Button(button_grid, text="✓  Save", command=self.save_current_song, style="Accent.TButton").grid(
             row=1, column=0, sticky="ew", padx=(0, 4), pady=(6, 0)
         )
-        ttk.Button(button_grid, text="Duplicate", command=self.duplicate_selected_song).grid(
+        ttk.Button(button_grid, text="⧉  Duplicate", command=self.duplicate_selected_song).grid(
             row=1, column=1, sticky="ew", pady=(6, 0)
         )
-        ttk.Button(button_grid, text="Import", command=self.import_song).grid(
+        ttk.Button(button_grid, text="↑  Import", command=self.import_song).grid(
             row=2, column=0, sticky="ew", padx=(0, 4), pady=(6, 0)
         )
-        ttk.Button(button_grid, text="Export", command=self.export_current_song).grid(
+        ttk.Button(button_grid, text="↓  Export", command=self.export_current_song).grid(
             row=2, column=1, sticky="ew", pady=(6, 0)
         )
-        ttk.Button(button_grid, text="Batch Import", command=self.import_multiple_songs).grid(
+        ttk.Button(button_grid, text="↑↑  Batch Import", command=self.import_multiple_songs).grid(
             row=3, column=0, sticky="ew", padx=(0, 4), pady=(6, 0)
         )
-        ttk.Button(button_grid, text="Export All", command=self.export_all_songs).grid(
+        ttk.Button(button_grid, text="↓↓  Export All", command=self.export_all_songs).grid(
             row=3, column=1, sticky="ew", pady=(6, 0)
         )
-        ttk.Button(parent, text="Toggle Favorite", command=self.toggle_favorite_song).grid(
+        ttk.Button(parent, text="★  Toggle Favorite", command=self.toggle_favorite_song).grid(
             row=4, column=0, sticky="ew", pady=(6, 0)
         )
-        ttk.Button(parent, text="Delete Selected", command=self.delete_selected_song, style="Danger.TButton").grid(
+        ttk.Button(parent, text="✗  Delete Selected", command=self.delete_selected_song, style="Danger.TButton").grid(
             row=5, column=0, sticky="ew", pady=(6, 0)
         )
 
