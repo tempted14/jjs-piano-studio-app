@@ -4168,6 +4168,8 @@ class PianoMacroApp(tk.Tk):
         self._mark_dirty()
 
     def _update_title(self) -> None:
+        if hasattr(self, "_indicator_after") and self._indicator_after:
+            return
         title = f"{'*' if self._is_dirty else ''}{APP_TITLE}"
         song = self.song_title.get().strip() or "Untitled Song"
         if song != "Untitled Song" or self._is_dirty:
@@ -5106,7 +5108,9 @@ class PianoMacroApp(tk.Tk):
             visible += 1
         total = len(self.library_entries)
         query = getattr(self, "library_search_var", tk.StringVar(value="")).get().strip()
-        if query or (getattr(self, "library_show_favorites_var", tk.BooleanVar(value=False)).get()):
+        if total == 0:
+            self.library_hint.set("No saved songs yet. Click 'New' or 'Import' to add.")
+        elif query or (getattr(self, "library_show_favorites_var", tk.BooleanVar(value=False)).get()):
             self.library_hint.set(f"{visible} of {total} song{'s' if total != 1 else ''} shown.")
         else:
             self.library_hint.set(f"{total} saved song{'s' if total != 1 else ''}.")
