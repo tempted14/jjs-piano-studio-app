@@ -8450,6 +8450,10 @@ class PianoMacroApp(tk.Tk):
         preview_only: bool,
         ws: dict[str, object],
     ) -> None:
+        """Playback worker thread. Processes all actions in order, sending
+        key down/up events at their scheduled times. Supports looping,
+        practice mode ramping, and MIDI synth output.
+        """
         timer_enabled = begin_high_resolution_timer()
         loop_enabled = bool(ws["loop_enabled"])
         loop_start = max(0.0, float(ws["loop_start"]))
@@ -8459,6 +8463,8 @@ class PianoMacroApp(tk.Tk):
         loop_count = 0
         practice = bool(ws["practice_mode"]) and loop_enabled
         metronome_on = bool(ws["metronome"])
+        synth_on = bool(ws["synth_on"])
+        synth_vol = int(ws["synth_vol"])
         if practice:
             current_speed = max(0.10, float(ws["practice_start"]))
             target_speed = max(current_speed, float(ws["practice_target"]))
@@ -8469,9 +8475,15 @@ class PianoMacroApp(tk.Tk):
             settings.speed = current_speed
             self._thread_status(f"Practice mode: {current_speed:.0%} speed (target: {target_speed:.0%})")
         try:
-            total = max(action.seconds for action in actions) if actions else 0.0
-            loop_total = min(total, loop_end) - loop_start if loop_enabled and loop_end > 0 else total
-            print(f"[DEBUG] _play_worker: {len(actions)} actions, total={total:.2f}s, preview_only={preview_only}, loop_enabled={loop_enabled}, loop_start={loop_start}, loop_end={loop_end}")
+            if not actions:
+                self._thread_progress(100.0)
+                self._thread_status("Nothing to play.")
+                return
+            total = max(action.seconds for action in actions)
+            loop_total = (min(total, loop_end) - loop_start
+                          if loop_enabled and loop_end > 0
+                          else total)
+
             if preview_only:
                 self._thread_status(f"Previewing {source_name}. No keys are being sent.")
             else:
@@ -8479,11 +8491,11 @@ class PianoMacroApp(tk.Tk):
                     f"Starting {source_name} with {self.sender.method} in {settings.start_delay:g}s. "
                     "Focus Roblox now."
                 )
-                print(f"[DEBUG] Waiting {settings.start_delay}s start delay...")
-                if not wait_until_precise(time.perf_counter() + settings.start_delay, self.stop_event):
-                    print("[DEBUG] Playback cancelled during start delay")
+                if not wait_until_precise(time.perf_counter() + settings.start_delay,
+                                            self.stop_event):
                     return
 
+            # Main playback loop
             while True:
                 start_time = time.perf_counter()
                 if loop_enabled and loop_start > 0 and loop_count == 0:
@@ -8496,40 +8508,44 @@ class PianoMacroApp(tk.Tk):
                 else:
                     action_start_idx = 0
 
+                # Process all actions in this pass
                 index = action_start_idx
-                print(f"[DEBUG] Starting pass loop_count={loop_count}, action_start_idx={index}, speed={settings.speed}")
                 while index < len(actions):
                     if self.stop_event.is_set():
-                        print("[DEBUG] Stop event detected, returning")
                         return
                     if self.pause_event.is_set():
-                        print("[DEBUG] Pause event detected, waiting...")
                         pause_started = time.perf_counter()
                         while self.pause_event.is_set():
                             if self.stop_event.is_set():
                                 return
                             time.sleep(0.02)
                         start_time += time.perf_counter() - pause_started
-                        print(f"[DEBUG] Resumed after pause")
                         continue
 
                     action = actions[index]
+
+                    # Loop boundary checks
                     if loop_enabled and loop_end > 0 and action.seconds > loop_end:
-                        print(f"[DEBUG] Action at {action.seconds:.3f}s past loop_end {loop_end}, breaking")
                         break
-                    if loop_enabled and loop_start > 0 and loop_count == 0 and action.seconds < loop_start:
+                    if (loop_enabled and loop_start > 0
+                            and loop_count == 0
+                            and action.seconds < loop_start):
                         index += 1
                         continue
 
+                    # Wait until the action's scheduled time
                     target = action.seconds / settings.speed
                     target_deadline = start_time + target
-                    now = time.perf_counter()
-                    if now < target_deadline:
-                        if not wait_until_precise(target_deadline, self.stop_event, self.pause_event):
-                            continue
+                    if time.perf_counter() < target_deadline:
+                        if not wait_until_precise(target_deadline,
+                                                   self.stop_event,
+                                                   self.pause_event):
+                            continue  # re-check stop/pause at top of loop
 
+                    # Resolve playable to key bindings and synth notes
                     bindings: list[KeyBinding] = []
                     preview_notes: set[int] = set()
+                    synth_notes: set[int] = set()
                     for playable in action.notes:
                         binding = self._resolve_playable(playable, settings)
                         if binding is not None:
@@ -8537,62 +8553,72 @@ class PianoMacroApp(tk.Tk):
                         preview_note = self._resolved_midi_note_for_preview(playable, settings)
                         if preview_note is not None:
                             preview_notes.add(preview_note)
-                    print(f"[DEBUG] Action #{index} at {action.seconds:.3f}s {action.action}: {len(bindings)} bindings, {len(preview_notes)} preview_notes, notes={[(p.kind, p.value) for p in action.notes[:4]]}")
-
-                    unique_bindings = list({binding.label: binding for binding in bindings}.values())
-                    synth_notes: set[int] = set()
-                    synth_vel_map: dict[int, int] = {}
-                    for playable in action.notes:
                         if playable.kind == "midi":
-                            fitted = self._fit_midi_note(int(playable.value) + settings.transpose, settings)
+                            fitted = self._fit_midi_note(
+                                int(playable.value) + settings.transpose, settings)
                             if fitted is not None:
                                 synth_notes.add(fitted)
-                                synth_vel_map[fitted] = 100
+
+                    unique_bindings = list({b.label: b for b in bindings}.values())
+
+                    # Execute the action
                     if action.action == "down":
                         if not preview_only:
-                            for binding in sorted(unique_bindings, key=lambda item: item.shifted):
+                            # Send shift first for shifted keys
+                            for binding in sorted(unique_bindings,
+                                                   key=lambda b: b.shifted):
                                 self.sender.key_down(binding)
-                        for sn, vel in synth_vel_map.items():
-                            self._synth_note_on(sn, vel, bool(ws["synth_on"]), int(ws["synth_vol"]))
-                            self.preview_note_velocities[sn] = vel
+                        for sn in synth_notes:
+                            self._synth_note_on(sn, 100, synth_on, synth_vol)
+                        for sn in synth_notes:
+                            self.preview_note_velocities[sn] = 100
                         if preview_notes:
                             self.highlight_midi_notes(preview_notes, add=True)
                         if metronome_on:
                             beat_pos = action.seconds * settings.bpm / 60.0
                             if abs(beat_pos - round(beat_pos)) < 0.06:
                                 self.after(0, self._metronome_tick)
-                    else:
+                    else:  # "up"
                         if not preview_only:
                             for binding in unique_bindings:
                                 self.sender.key_up(binding)
                         for sn in synth_notes:
-                            self._synth_note_off(sn, bool(ws["synth_on"]))
+                            self._synth_note_off(sn, synth_on)
                             self.preview_note_velocities.pop(sn, None)
                         if preview_notes:
                             self.unhighlight_midi_notes(preview_notes)
 
+                    # Progress
                     if loop_total > 0:
                         effective_sec = action.seconds - (loop_start if loop_enabled else 0)
-                        self._thread_progress(min(100.0, 100.0 * effective_sec / max(0.01, loop_total)))
+                        self._thread_progress(
+                            min(100.0, 100.0 * effective_sec / max(0.01, loop_total)))
                     elif total > 0:
-                        self._thread_progress(min(100.0, 100.0 * action.seconds / total))
+                        self._thread_progress(
+                            min(100.0, 100.0 * action.seconds / total))
+
                     index += 1
 
+                # End of one pass through the actions
                 loop_count += 1
-                print(f"[DEBUG] Pass complete, loop_count={loop_count}, practice={practice}")
+
                 if practice:
                     steps_done = loop_count // loops_per_step
-                    new_speed = min(target_speed, current_speed + steps_done * increment)
-                    if new_speed != settings.speed:
+                    new_speed = min(target_speed,
+                                     current_speed + steps_done * increment)
+                    if abs(new_speed - settings.speed) > 0.001:
                         settings.speed = new_speed
                         self.practice_current_speed = new_speed
-                        self._thread_status(
-                            f"Practice: {new_speed:.0%} speed "
-                            f"(step {steps_done + 1}, loop {loop_count % loops_per_step + 1}/{loops_per_step})"
-                        )
+                    self._thread_status(
+                        f"Practice: {new_speed:.0%} speed "
+                        f"(step {steps_done + 1}, "
+                        f"loop {loop_count % loops_per_step + 1}/{loops_per_step})"
+                    )
                     if new_speed >= target_speed and loop_count >= loops_per_step:
-                        self._thread_status(f"Practice complete! Reached {target_speed:.0%} speed.")
+                        self._thread_status(
+                            f"Practice complete! Reached {target_speed:.0%} speed.")
                         break
+
                 if not loop_enabled and not practice:
                     break
                 if loop_count > 9999:
